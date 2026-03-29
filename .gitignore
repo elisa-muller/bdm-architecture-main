@@ -1,0 +1,8 @@
+.env
+config/*.cfg
+kafkui_config.yml
+data_sources/*
+__pycache__/
+*.log
+config/kafkaui_config.yml
+config/.placeholder
