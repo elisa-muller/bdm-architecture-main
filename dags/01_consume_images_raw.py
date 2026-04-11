@@ -27,7 +27,7 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("IMAGES_CONSUMER_TIMEOUT_MS", "5000"))
     dag_id="consume_images_raw_to_bronze",
     description="Consume image payloads from Kafka and store native image files in Bronze temporal.",
     start_date=datetime(2025, 1, 1),
-    schedule=None,
+    schedule="*/1 * * * *",
     catchup=False,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
     tags=["images", "kafka", "bronze", "unstructured"],

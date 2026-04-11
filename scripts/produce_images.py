@@ -1,4 +1,4 @@
-from _future_ import annotations
+from __future__ import annotations
 
 import base64
 import json
@@ -116,5 +116,5 @@ def main() -> None:
         producer.close()
 
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
