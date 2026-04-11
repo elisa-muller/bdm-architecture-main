@@ -277,8 +277,9 @@ services:
         condition: service_healthy
     restart: unless-stopped
   
-  trends-api:   
+  trends-api:
     build: ./docker/airflow
+    entrypoint: /bin/bash
     env_file:
       - .env
     environment:
@@ -288,7 +289,9 @@ services:
     volumes:
       - ./scripts:/opt/airflow/scripts
       - ./data_sources:/opt/airflow/data_sources
-    command: uvicorn trends_api:app --host 0.0.0.0 --port 8000 --app-dir /opt/airflow/scripts
+    command:
+      - -c
+      - uvicorn trends_api:app --host 0.0.0.0 --port 8000 --app-dir /opt/airflow/scripts
     depends_on:
       kafka:
         condition: service_healthy
