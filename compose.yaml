@@ -253,7 +253,7 @@ services:
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
-
+  
   image-producer:
     build: ./docker/airflow
     env_file:
@@ -262,7 +262,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: 'kafka:9092'
       TOPIC_IMAGES_RAW: 'music-images-raw'
       IMAGES_SOURCE_PATH: '/opt/airflow/data_sources/images'
-      MAX_IMAGES: '10'
+      MAX_IMAGES: '0'
+      RUN_FOREVER: 'true'
       SLEEP_SECONDS: '3'
       SHUFFLE_IMAGES: 'true'
       RESIZE_MAX_DIM: '512'
@@ -274,7 +275,7 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    restart: "no"
+    restart: unless-stopped
   
   trends-api:   
     build: ./docker/airflow

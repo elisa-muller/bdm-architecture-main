@@ -1,8 +1,7 @@
-from __future__ import annotations
+from _future_ import annotations
 
 import base64
 import json
-import mimetypes
 import os
 import random
 import time
@@ -23,10 +22,10 @@ IMAGES_SOURCE_PATH = Path(
 )
 
 MAX_IMAGES = int(os.getenv("MAX_IMAGES", "10"))
+RUN_FOREVER = os.getenv("RUN_FOREVER", "false").lower() == "true"
 SLEEP_SECONDS = float(os.getenv("SLEEP_SECONDS", "1"))
 SHUFFLE_IMAGES = os.getenv("SHUFFLE_IMAGES", "true").lower() == "true"
 
-# Optional resizing/compression for safer Kafka demo traffic
 RESIZE_MAX_DIM = int(os.getenv("RESIZE_MAX_DIM", "512"))
 JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "75"))
 
@@ -34,10 +33,6 @@ ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def compress_image_for_stream(image_path: Path) -> tuple[bytes, str, str]:
-    """
-    Open image, resize it to a reasonable max dimension, and encode as JPEG bytes.
-    Returns: (binary_content, file_extension, mime_type)
-    """
     with Image.open(image_path) as img:
         img = img.convert("RGB")
         img.thumbnail((RESIZE_MAX_DIM, RESIZE_MAX_DIM))
@@ -78,13 +73,9 @@ def main() -> None:
         print(f"No valid image files found in {IMAGES_SOURCE_PATH}")
         return
 
-    if SHUFFLE_IMAGES:
-        random.shuffle(image_files)
-
-    selected_images = image_files[:MAX_IMAGES]
-
     print(f"Found {len(image_files)} images total")
-    print(f"Sending {len(selected_images)} images")
+    print(f"RUN_FOREVER={RUN_FOREVER}")
+    print(f"MAX_IMAGES={MAX_IMAGES}")
     print(f"SLEEP_SECONDS={SLEEP_SECONDS}")
     print(f"RESIZE_MAX_DIM={RESIZE_MAX_DIM}, JPEG_QUALITY={JPEG_QUALITY}")
 
@@ -96,24 +87,34 @@ def main() -> None:
         max_block_ms=30000,
     )
 
-    try:
-        for i, image_path in enumerate(selected_images, start=1):
-            event = build_event(image_path)
-            producer.send(TOPIC_IMAGES_RAW, value=event)
-            print(f"[{i}/{len(selected_images)}] Sent: {image_path.name}")
-            time.sleep(SLEEP_SECONDS)
+    sent_count = 0
 
-        producer.flush()
-        print(f"Done. Sent {len(selected_images)} image events to '{TOPIC_IMAGES_RAW}'.")
+    try:
+        while True:
+            current_batch = image_files[:]
+            if SHUFFLE_IMAGES:
+                random.shuffle(current_batch)
+
+            for image_path in current_batch:
+                event = build_event(image_path)
+                producer.send(TOPIC_IMAGES_RAW, value=event)
+
+                sent_count += 1
+                print(f"[{sent_count}] Sent: {image_path.name}")
+
+                time.sleep(SLEEP_SECONDS)
+
+                if not RUN_FOREVER and sent_count >= MAX_IMAGES:
+                    producer.flush()
+                    print(
+                        f"Done. Sent {sent_count} image events to '{TOPIC_IMAGES_RAW}'."
+                    )
+                    return
+
     finally:
+        producer.flush()
         producer.close()
 
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
-
-
-""" 
-in order to trigger the image streaming: keep it manual (for now)
-docker compose exec -e MAX_IMAGES=5 -e SLEEP_SECONDS=1 airflow-worker python /opt/airflow/scripts/produce_images.py
-"""
