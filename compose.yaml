@@ -302,8 +302,8 @@ services:
       TOPIC_TRENDS_RAW: 'music-trends-raw'
       TRENDS_API_BASE_URL: 'http://trends-api:8000'
       TRENDS_API_STREAM_ENDPOINT: '/stream'
-      MAX_POSTS: '10'
-      RUN_FOREVER: 'false'
+      RUN_FOREVER: 'true'
+      MAX_POSTS: '0'
       REQUEST_TIMEOUT: '60'
       RETRY_SLEEP_SECONDS: '3'
     volumes:
@@ -315,7 +315,7 @@ services:
         condition: service_healthy
       trends-api:
         condition: service_started
-    restart: "no"
+    restart: unless-stopped
 
   jupyter-playground:
     build: ./docker/jupyter

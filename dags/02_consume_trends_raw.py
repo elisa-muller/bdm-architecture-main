@@ -27,7 +27,7 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("TRENDS_CONSUMER_TIMEOUT_MS", "5000"))
     dag_id="consume_trends_raw_to_bronze",
     description="Consume semistructured trend events from Kafka and store raw JSONL in Bronze temporal.",
     start_date=datetime(2025, 1, 1),
-    schedule=None,
+    schedule="*/5 * * * *" #every 5 minutes
     catchup=False,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
     tags=["trends", "kafka", "bronze", "semi-structured"],
