@@ -1,38 +1,232 @@
-# Kafka and Airflow -- Hands-On Lab
+# BDM P1: Music Data Platform — Pipeline
 
-Hands-on session introducing Kafka and Airflow.
+Hands-on project implementing a data platform combining streaming (Kafka) and batch processing (Airflow), using MinIO as Bronze data lake storage.
+
+---
 
 ## Services
 
 | Service | Image | Ports | Role |
 |---|---|---|---|
-| `kafka` | `apache/kafka:4.2.0` | 9092 | Event streaming (KRaft) |
-| `kafka-producer` | built locally | — | Synthetic data generator |
-| `minio` | `minio/minio` | 9000, 9001 | S3-compatible object storage |
-| `jupyter` | built locally | 8888 | Interactive notebooks |
+| `kafka` | `apache/kafka:4.2.0` | 9092 | Event streaming |
+| `kafka-ui` | `provectuslabs/kafka-ui` | 8081 | Kafka monitoring |
+| `minio` | `minio/minio` | 9000, 9001 | S3-compatible data lake (Bronze) |
 | `airflow-apiserver` | built locally | 8080 | Airflow UI + API |
-| `airflow-scheduler` | built locally | — | DAG trigger scheduling |
+| `airflow-scheduler` | built locally | — | DAG scheduling |
 | `airflow-worker` | built locally | — | Task execution |
 | `postgres` | `postgres:16` | — | Airflow metadata DB |
-| `redis` | `redis:7.2-bookworm` | — | Celery task queue |
+| `redis` | `redis:7.2-bookworm` | — | Celery queue |
+| `jupyter-playground` | built locally | 8888 | Exploration |
+| `trends-api` | built locally | — | Simulated trends API |
+| `image-producer` | built locally | — | Image streaming producer |
+| `trends-producer` | built locally | — | Trends streaming producer |
+
+---
 
 ## Quick start
 
 ```bash
 echo "AIRFLOW_UID=$(id -u)" > .env
 docker compose up --build -d
-docker compose ps   # wait for (healthy) on all services
+docker compose ps   # wait until all services are healthy
 ```
+
+---
+
+## UIs
 
 | UI | URL | Credentials |
 |---|---|---|
 | Airflow | http://localhost:8080 | airflow / airflow |
 | MinIO | http://localhost:9001 | minioadmin / minioadmin |
-| JupyterLab | http://localhost:8888 | token: playground |
+| Kafka UI | http://localhost:8081 | — |
+
+---
+
+## Initialization (first time only)
+
+After starting the services:
+
+1. Open Airflow UI  
+2. Trigger the DAG: `init_platform`
+
+This will:
+
+- create Kafka topics  
+- create MinIO bucket (`bronze`)  
+- initialize folder structure  
+
+---
+
+## Pipelines
+
+### Image stream (hot path)
+
+- Continuous producer (`RUN_FOREVER=true`)
+- Sends 1 image every **3 seconds**
+- Kafka topic: `music-images-raw`
+
+| Component | Value |
+|---|---|
+| DAG | `consume_images_raw_to_bronze` |
+| Schedule | every 1 minute |
+| Output | `bronze/temporal/unstructured/images/raw/` |
+
+---
+
+### Trends stream (hot path)
+
+- `trends-api` simulates social media posts  
+- `trends-producer` streams continuously  
+- Kafka topic: `music-trends-raw`
+
+| Component | Value |
+|---|---|
+| DAG | `consume_trends_raw_to_bronze` |
+| Schedule | every 5 minutes |
+| Output | `bronze/temporal/semi_structured/trends/raw/` |
+
+(JSONL files)
+
+---
+
+### Structured batch (cold path)
+
+| Property | Value |
+|---|---|
+| DAG | `structured_batch` |
+| Schedule | daily (00:00) |
+| Type | batch processing |
+
+Pipeline:
+
+```
+Last.fm → MusicBrainz → ReccoBeats → enriched dataset
+```
+
+Used to:
+- enrich music metadata  
+- generate structured datasets  
+- feed the trends simulation  
+
+---
 
 ## DAGs
 
 | DAG | Schedule | What it does |
 |---|---|---|
-| `ingest_server_metrics` | every 10 min | Consume Kafka → raw Delta table → per-server aggregates |
-| `cleanup_server_metrics` | daily 02:00 UTC | ACID DELETE of bad sensor readings |
+| `init_platform` | manual | Initialize Kafka topics and MinIO bucket |
+| `consume_images_raw_to_bronze` | every 1 min | Consume image stream → store in Bronze |
+| `consume_trends_raw_to_bronze` | every 5 min | Consume trends stream → store JSONL in Bronze |
+| `structured_batch` | daily | Batch ingestion + enrichment pipeline |
+
+---
+
+## Orchestration
+
+| Component | Behavior |
+|---|---|
+| Producers | Continuous |
+| Kafka | Streaming buffer |
+| Airflow consumers | Scheduled batch |
+| Structured batch | Daily execution |
+
+Execution flow:
+
+```
+Streaming → Kafka → Airflow → MinIO (Bronze)
+Batch → APIs → Airflow → structured outputs
+```
+
+---
+
+## Expected behavior
+
+After initialization:
+
+### Kafka
+
+- `music-images-raw` receives continuous events  
+- `music-trends-raw` receives continuous events  
+
+### Airflow
+
+- Image DAG runs every minute  
+- Trends DAG runs every 5 minutes  
+- Batch DAG runs daily  
+
+### MinIO (Bronze Layer)
+
+```
+bronze/
+ ├── temporal/
+ │   ├── unstructured/
+ │   │   └── images/raw/
+ │   ├── semi_structured/
+ │   │   └── trends/raw/
+ │   └── structured/
+ │       └── csv/              ← raw batch files (CSV)
+ │
+ └── persistent/
+     ├── structured/
+     │   ├── lastfm/
+     │   ├── musicbrainz/
+     │   └── reccobeats/
+     └── semi_structured/
+```
+
+| Layer | Description |
+|---|---|
+| `temporal` | Raw ingested data (no transformations applied) |
+| `persistent` | Processed and structured datasets stored in Parquet format |
+
+#### Temporal layer
+- Represents the **raw ingestion zone (Bronze raw)**
+- Stores data exactly as it arrives from different ingestion pipelines:
+  - `images/raw/` → image stream (binary files)
+  - `trends/raw/` → semi-structured JSONL events
+  - `structured/csv/` → raw batch outputs in CSV format  
+
+#### Persistent layer
+- Represents the **processed Bronze layer (structured storage)**
+- Stores cleaned and enriched datasets:
+  - `lastfm/` → ingestion results from Last.fm  
+  - `musicbrainz/` → ISRC resolution data  
+  - `reccobeats/` → audio feature enrichment  
+- Data is stored in **Parquet format**, optimized for analytics  
+
+#### Data flow
+
+```
+Streaming (images, trends)
+        ↓
+Kafka
+        ↓
+Airflow consumers
+        ↓
+Bronze / temporal
+
+Batch APIs (Last.fm, MusicBrainz, ReccoBeats)
+        ↓
+Airflow batch DAG
+        ↓
+Bronze / temporal (CSV)
+        ↓
+Processed → Bronze / persistent (Parquet)
+```
+
+This architecture clearly separates:
+- **raw ingestion (temporal)**  
+- **processed structured storage (persistent)**  
+
+and prepares the system for future Silver and Gold transformations.
+
+---
+
+## Validation
+
+| Component | What to check |
+|---|---|
+| Kafka UI | Topics `music-images-raw`, `music-trends-raw` |
+| Airflow | DAGs running, tasks in green |
+| MinIO | New image files and `.jsonl` trend files |

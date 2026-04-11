@@ -38,7 +38,7 @@ COMMON_ENV = {
     dag_id="structured_batch",
     description="Batch ingestion pipeline: Last.fm → MusicBrainz → ReccoBeats → merge",
     start_date=datetime(2025, 1, 1),
-    schedule=None,
+    schedule="0 0 * * *",
     catchup=False,
     default_args={
         "retries": 1,
@@ -46,6 +46,7 @@ COMMON_ENV = {
     },
     tags=["batch", "structured", "lakehouse", "delta"],
 )
+
 def structured_batch():
 
     # -----------------------------
