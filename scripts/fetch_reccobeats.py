@@ -11,9 +11,7 @@ import requests
 from deltalake import DeltaTable, write_deltalake
 from minio import Minio
 
-# -----------------------------
 # MinIO / Delta configuration
-# -----------------------------
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ENDPOINT = MINIO_ENDPOINT.replace("http://", "").replace("https://", "").rstrip("/")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
@@ -37,9 +35,7 @@ DELTA_STORAGE_OPTIONS = {
     "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
 }
 
-# -----------------------------
 # ReccoBeats configuration
-# -----------------------------
 RECCOBEATS_BASE = os.getenv("RECCOBEATS_BASE", "https://api.reccobeats.com/v1")
 
 RB_BATCH_SIZE = 25
@@ -49,10 +45,8 @@ CHECKPOINT_EVERY_BATCHES = 10
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-# -----------------------------
-# MinIO client
-# -----------------------------
 
+# MinIO client
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -60,9 +54,8 @@ minio_client = Minio(
     secure=MINIO_SECURE,
 )
 
-# -----------------------------
+
 # Helpers
-# -----------------------------
 def safe_str(x) -> str:
     if pd.isna(x):
         return ""

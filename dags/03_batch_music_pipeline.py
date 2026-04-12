@@ -11,9 +11,7 @@ from airflow.operators.bash import BashOperator
 PROJECT_DIR = os.getenv("PROJECT_DIR", "/opt/airflow")
 SCRIPTS_DIR = os.path.join(PROJECT_DIR, "scripts")
 
-# -----------------------------
 # Environment variables
-# -----------------------------
 COMMON_ENV = {
     **os.environ,
 
@@ -38,7 +36,8 @@ COMMON_ENV = {
     dag_id="structured_batch",
     description="Batch ingestion pipeline: Last.fm → MusicBrainz → ReccoBeats → merge",
     start_date=datetime(2025, 1, 1),
-    schedule="0 0 * * *",
+    schedule="0 0 * * *", #daily
+    # schedule="0 * * * *", # we try to trigger it every hour to see if the ingestion works
     catchup=False,
     default_args={
         "retries": 1,
@@ -48,46 +47,37 @@ COMMON_ENV = {
 )
 
 def structured_batch():
-
-    # -----------------------------
     # 1. Last.fm ingestion
-    # -----------------------------
     lastfm_task = BashOperator(
         task_id="extract_lastfm_raw",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {SCRIPTS_DIR}/01_lastfm_batch.py"
+            f"python {SCRIPTS_DIR}/lastfm_batch.py"
         ),
         env=COMMON_ENV,
     )
 
-    # -----------------------------
     # 2. MusicBrainz enrichment
-    # -----------------------------
     musicbrainz_task = BashOperator(
         task_id="resolve_isrc_musicbrainz",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {SCRIPTS_DIR}/02_musicbrainz_to_isrc.py"
+            f"python {SCRIPTS_DIR}/musicbrainz_to_isrc.py"
         ),
         env=COMMON_ENV,
     )
 
-    # -----------------------------
     # 3. ReccoBeats enrichment
-    # -----------------------------
     reccobeats_task = BashOperator(
         task_id="fetch_reccobeats_features",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {SCRIPTS_DIR}/03_fetch_reccobeats.py"
+            f"python {SCRIPTS_DIR}/fetch_reccobeats.py"
         ),
         env=COMMON_ENV,
     )
 
-    # -----------------------------
     # Pipeline order
-    # -----------------------------
     lastfm_task >> musicbrainz_task >> reccobeats_task
 
 

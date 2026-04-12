@@ -12,9 +12,7 @@ import requests
 from deltalake import DeltaTable, write_deltalake
 from minio import Minio
 
-# -----------------------------
 # MinIO / Delta configuration
-# -----------------------------
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ENDPOINT = MINIO_ENDPOINT.replace("http://", "").replace("https://", "").rstrip("/")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
@@ -38,14 +36,14 @@ DELTA_STORAGE_OPTIONS = {
     "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
 }
 
-# -----------------------------
+
 # MusicBrainz configuration
-# -----------------------------
 MUSICBRAINZ_BASE = os.getenv("MUSICBRAINZ_BASE", "https://musicbrainz.org/ws/2")
 MUSICBRAINZ_CONTACT_EMAIL = os.getenv("MUSICBRAINZ_CONTACT_EMAIL", "team@example.com")
 MUSICBRAINZ_HEADERS = {
     "User-Agent": f"bdm-project/1.0 (student-project; contact: {MUSICBRAINZ_CONTACT_EMAIL})"
 }
+
 
 MB_SLEEP = 1.5
 MAX_RETRIES_503 = 3
@@ -59,15 +57,13 @@ MIN_SEARCH_SCORE = 85  # heuristic, adjust if needed
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-# -----------------------------
+
 # HTTP session
-# -----------------------------
 session = requests.Session()
 session.headers.update(MUSICBRAINZ_HEADERS)
 
-# -----------------------------
+
 # MinIO client
-# -----------------------------
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -75,9 +71,7 @@ minio_client = Minio(
     secure=MINIO_SECURE,
 )
 
-# -----------------------------
 # Helpers
-# -----------------------------
 def safe_str(x) -> str:
     if pd.isna(x):
         return ""

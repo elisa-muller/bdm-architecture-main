@@ -14,9 +14,7 @@ from deltalake import DeltaTable, write_deltalake
 
 load_dotenv()
 
-# -----------------------------
 # Environment
-# -----------------------------
 LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
 if not LASTFM_API_KEY:
     raise ValueError("Missing LASTFM_API_KEY in environment variables or .env")
@@ -43,9 +41,8 @@ DELTA_STORAGE_OPTIONS = {
 # Persistent Delta path aligned with init_platform DAG layout
 DELTA_URI = f"s3://{MINIO_BUCKET}/persistent/structured/lastfm/delta/tracks_delta"
 
-# -----------------------------
+
 # Config
-# -----------------------------
 tags = [
     "pop", "rock", "jazz", "electronic", "classical", "hip-hop", "reggae",
     "indie", "metal", "blues", "folk", "soul", "dance", "ambient",
@@ -58,19 +55,17 @@ countries = [
 ]
 
 per_page_limit = 50
-chart_pages = 40
-tag_pages = 40
-geo_pages = 40
+chart_pages = 1
+tag_pages = 1
+geo_pages = 1
 sleep_seconds = 0.25
 
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 ingested_at_utc = datetime.now(timezone.utc).isoformat()
 
-# -----------------------------
-# MinIO client
-# -----------------------------
 
+# MinIO client
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -78,9 +73,8 @@ minio_client = Minio(
     secure=MINIO_SECURE,
 )
 
-# -----------------------------
+
 # Helpers
-# -----------------------------
 def ensure_bucket(bucket_name: str) -> None:
     try:
         if not minio_client.bucket_exists(bucket_name):

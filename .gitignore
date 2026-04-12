@@ -7,3 +7,4 @@ __pycache__/
 config/kafkaui_config.yml
 config/.placeholder
 scripts/audio_features.csv
+.DS_Store

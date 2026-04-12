@@ -321,28 +321,6 @@ services:
         condition: service_started
     restart: unless-stopped
 
-  jupyter-playground:
-    build: ./docker/jupyter
-    ports:
-      - "8888:8888"
-    environment:
-      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-playground}
-      MINIO_ENDPOINT: 'http://minio:9000'
-      MINIO_ACCESS_KEY: 'minioadmin'
-      MINIO_SECRET_KEY: 'minioadmin'
-      KAFKA_BOOTSTRAP_SERVERS: 'kafka:9092'
-      TOPIC_IMAGES_RAW: 'music-images-raw'
-      TOPIC_TRENDS_RAW: 'music-trends-raw'
-    volumes:
-      - ./notebooks:/home/jovyan/notebooks
-      - ./scripts:/home/jovyan/scripts
-    restart: unless-stopped
-    depends_on:
-      kafka:
-        condition: service_healthy
-      minio:
-        condition: service_started
-
 volumes:
   postgres-db-volume:
   minio_data:
