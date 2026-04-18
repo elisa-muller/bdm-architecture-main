@@ -9,7 +9,7 @@ from airflow.operators.bash import BashOperator
 
 # Base path inside the Airflow container
 PROJECT_DIR = os.getenv("PROJECT_DIR", "/opt/airflow")
-SCRIPTS_DIR = os.path.join(PROJECT_DIR, "scripts")
+LANDING_SCRIPTS_DIR = os.path.join(PROJECT_DIR, "scripts", "landing")
 
 # Environment variables
 COMMON_ENV = {
@@ -20,7 +20,7 @@ COMMON_ENV = {
     "RECCOBEATS_API_KEY": os.getenv("RECCOBEATS_API_KEY", ""),
     "MUSICBRAINZ_CONTACT_EMAIL": os.getenv("MUSICBRAINZ_CONTACT_EMAIL", "team@example.com"),
 
-    # MinIO (CRUCIAL)
+    # MinIO
     "MINIO_ENDPOINT": os.getenv("MINIO_ENDPOINT", "minio:9000"),
     "MINIO_ACCESS_KEY": os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin")),
     "MINIO_SECRET_KEY": os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")),
@@ -34,50 +34,44 @@ COMMON_ENV = {
 
 @dag(
     dag_id="structured_batch",
-    description="Batch ingestion pipeline: Last.fm → MusicBrainz → ReccoBeats → merge",
+    description="Batch ingestion pipeline: Last.fm -> MusicBrainz -> ReccoBeats",
     start_date=datetime(2025, 1, 1),
-    schedule="0 0 * * *", #daily
-    # schedule="0 * * * *", # we try to trigger it every hour to see if the ingestion works
+    schedule="0 0 * * *",  # daily
     catchup=False,
     default_args={
         "retries": 1,
         "retry_delay": timedelta(minutes=2),
     },
-    tags=["batch", "structured", "lakehouse", "delta"],
+    tags=["batch", "structured", "landing", "lakehouse", "delta"],
 )
-
 def structured_batch():
-    # 1. Last.fm ingestion
     lastfm_task = BashOperator(
         task_id="extract_lastfm_raw",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {SCRIPTS_DIR}/lastfm_batch.py"
+            f"python {LANDING_SCRIPTS_DIR}/lastfm_batch.py"
         ),
         env=COMMON_ENV,
     )
 
-    # 2. MusicBrainz enrichment
     musicbrainz_task = BashOperator(
         task_id="resolve_isrc_musicbrainz",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {SCRIPTS_DIR}/musicbrainz_to_isrc.py"
+            f"python {LANDING_SCRIPTS_DIR}/musicbrainz_to_isrc.py"
         ),
         env=COMMON_ENV,
     )
 
-    # 3. ReccoBeats enrichment
     reccobeats_task = BashOperator(
         task_id="fetch_reccobeats_features",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {SCRIPTS_DIR}/fetch_reccobeats.py"
+            f"python {LANDING_SCRIPTS_DIR}/fetch_reccobeats.py"
         ),
         env=COMMON_ENV,
     )
 
-    # Pipeline order
     lastfm_task >> musicbrainz_task >> reccobeats_task
 
 

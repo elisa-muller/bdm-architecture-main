@@ -16,20 +16,21 @@ TOPIC_IMAGES_RAW = os.getenv("TOPIC_IMAGES_RAW", "music-images-raw")
 TOPIC_TRENDS_RAW = os.getenv("TOPIC_TRENDS_RAW", "music-trends-raw")
 
 BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
 
 
 @dag(
     dag_id="init_platform",
-    description="Initialize platform infrastructure: Bronze bucket, Kafka topics, and Bronze folder structure.",
+    description="Initialize platform infrastructure: zone buckets, Kafka topics, and folder structure.",
     schedule=None,
     start_date=datetime.now(tz=timezone.utc) - timedelta(days=1),
     catchup=False,
-    tags=["init", "kafka", "minio", "bronze"],
+    tags=["init", "kafka", "minio", "bronze", "trusted"],
 )
 def init_platform():
 
     @task()
-    def create_bronze_bucket() -> str:
+    def create_zone_buckets() -> list[str]:
         from minio import Minio
 
         endpoint = MINIO_ENDPOINT.replace("http://", "").replace("https://", "")
@@ -42,16 +43,21 @@ def init_platform():
             secure=secure,
         )
 
-        if client.bucket_exists(BRONZE_BUCKET):
-            print(f"Bucket '{BRONZE_BUCKET}' already exists.")
-        else:
-            client.make_bucket(BRONZE_BUCKET)
-            print(f"Bucket '{BRONZE_BUCKET}' created.")
+        buckets = [BRONZE_BUCKET, TRUSTED_BUCKET]
+        created_or_existing = []
 
-        return BRONZE_BUCKET
+        for bucket_name in buckets:
+            if client.bucket_exists(bucket_name):
+                print(f"Bucket '{bucket_name}' already exists.")
+            else:
+                client.make_bucket(bucket_name)
+                print(f"Bucket '{bucket_name}' created.")
+            created_or_existing.append(bucket_name)
+
+        return created_or_existing
 
     @task()
-    def create_bronze_layout(bucket_name: str) -> list[str]:
+    def create_bronze_layout(bucket_names: list[str]) -> list[str]:
         from minio import Minio
         from minio.error import S3Error
 
@@ -65,35 +71,34 @@ def init_platform():
             secure=secure,
         )
 
-        # These are placeholder objects so the structure is visible in MinIO UI.
-        # In S3/MinIO, folders are really just prefixes.
         prefixes = [
-            # Temporal = raw landing zone used in P1
-            "temporal/structured/lastfm/raw/",
-            "temporal/structured/musicbrainz/raw/",
-            "temporal/structured/reccobeats/raw/",
-            "temporal/semi_structured/trends/raw/",
-            #"temporal/unstructured/images/raw/", --> we decided not to store them
+            # Landing / Bronze
+            f"{BRONZE_BUCKET}:temporal/structured/lastfm/raw/",
+            f"{BRONZE_BUCKET}:temporal/structured/musicbrainz/raw/",
+            f"{BRONZE_BUCKET}:temporal/structured/reccobeats/raw/",
+            f"{BRONZE_BUCKET}:temporal/semi_structured/trends/raw/",
+            f"{BRONZE_BUCKET}:persistent/structured/lastfm/delta/",
+            f"{BRONZE_BUCKET}:persistent/structured/musicbrainz/delta/",
+            f"{BRONZE_BUCKET}:persistent/structured/reccobeats/delta/",
+            f"{BRONZE_BUCKET}:persistent/semi_structured/trends/delta/",
 
-            # Persistent = future-ready area, mostly architecture placeholder for now
-            "persistent/structured/lastfm/delta/",
-            "persistent/structured/musicbrainz/delta/",
-            "persistent/structured/reccobeats/delta/",
-            "persistent/semi_structured/trends/delta/",
-            #"persistent/unstructured/images/delta/", --> we decided not to store them
+            # Trusted
+            f"{TRUSTED_BUCKET}:structured/lastfm/delta/",
+            f"{TRUSTED_BUCKET}:structured/musicbrainz/delta/",
+            f"{TRUSTED_BUCKET}:structured/reccobeats/delta/",
         ]
 
         created = []
 
-        for prefix in prefixes:
+        for item in prefixes:
+            bucket_name, prefix = item.split(":", 1)
             object_name = f"{prefix}.keep"
 
             try:
-                # Check whether placeholder already exists
                 client.stat_object(bucket_name, object_name)
-                print(f"Prefix already initialized: {object_name}")
+                print(f"Prefix already initialized: s3://{bucket_name}/{object_name}")
             except S3Error as e:
-                if e.code == "NoSuchKey" or e.code == "NoSuchObject" or e.code == "NoSuchResource":
+                if e.code in {"NoSuchKey", "NoSuchObject", "NoSuchResource"}:
                     data = io.BytesIO(b"")
                     client.put_object(
                         bucket_name=bucket_name,
@@ -102,11 +107,11 @@ def init_platform():
                         length=0,
                         content_type="text/plain",
                     )
-                    print(f"Created prefix placeholder: {object_name}")
+                    print(f"Created prefix placeholder: s3://{bucket_name}/{object_name}")
                 else:
                     raise
 
-            created.append(object_name)
+            created.append(f"s3://{bucket_name}/{object_name}")
 
         return created
 
@@ -123,7 +128,6 @@ def init_platform():
         ]
 
         created_or_existing = []
-
         existing_topics = set(admin.list_topics())
 
         for topic in topics_to_create:
@@ -143,12 +147,12 @@ def init_platform():
         admin.close()
         return created_or_existing
 
-    bucket = create_bronze_bucket()
-    layout = create_bronze_layout(bucket)
+    buckets = create_zone_buckets()
+    layout = create_bronze_layout(buckets)
     topics = create_kafka_topics()
 
-    bucket >> layout
-    bucket >> topics
+    buckets >> layout
+    buckets >> topics
 
 
 init_platform()
