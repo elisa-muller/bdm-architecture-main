@@ -116,8 +116,8 @@ Used to:
 | DAG | Schedule | What it does |
 |---|---|---|
 | `init_platform` | manual | Initialize Kafka topics and MinIO bucket |
-| `consume_images_raw_to_bronze` | every 1 min | Consume image stream → store in Bronze |
-| `consume_trends_raw_to_bronze` | every 5 min | Consume trends stream → store JSONL in Bronze |
+| `consume_images_raw_to_bronze` | every 1 min | Ingest → temporal → migrate to persistent → record metadata |
+| `consume_trends_raw_to_bronze` | every 5 min | Ingest → temporal → migrate to persistent → record metadata |
 | `structured_batch` | daily | Batch ingestion + enrichment pipeline |
 
 ---
@@ -161,39 +161,60 @@ After initialization:
 bronze/
  ├── temporal/
  │   ├── unstructured/
- │   │   └── images/raw/
+ │   │   └── images/raw/             ← temporary staging
  │   ├── semi_structured/
- │   │   └── trends/raw/
+ │   │   └── trends/raw/             ← temporary staging
  │   └── structured/
- │       └── csv/              ← raw batch files (CSV)
+ │       └── csv/                    ← temporary staging
  │
- └── persistent/
-     ├── structured/
-     │   ├── lastfm/
-     │   ├── musicbrainz/
-     │   └── reccobeats/
+ ├── persistent/
+ │   ├── unstructured/
+ │   │   └── images/raw/             ← migrated from temporal
+ │   ├── semi_structured/
+ │   │   └── trends/raw/             ← migrated from temporal
+ │   └── structured/
+ │       ├── lastfm/
+ │       ├── musicbrainz/
+ │       └── reccobeats/
+ │
+ └── metadata/
+     ├── unstructured/
+     │   └── image/                  ← ingestion records
      └── semi_structured/
+         └── jsonl/                  ← ingestion records
 ```
 
-| Layer | Description |
-|---|---|
-| `temporal` | Raw ingested data (no transformations applied) |
-| `persistent` | Processed and structured datasets stored in Parquet format |
+| Layer | Purpose | Retention |
+|---|---|---|
+| `temporal` | Temporary ingestion staging | Migrated immediately to persistent |
+| `persistent` | Validated long-term Bronze storage | Kept for historical analysis |
+| `metadata` | Data lineage and catalog records | Historical metadata tracking |
 
 #### Temporal layer
-- Represents the **raw ingestion zone (Bronze raw)**
-- Stores data exactly as it arrives from different ingestion pipelines:
-  - `images/raw/` → image stream (binary files)
-  - `trends/raw/` → semi-structured JSONL events
-  - `structured/csv/` → raw batch outputs in CSV format  
+- **Purpose**: Temporary staging zone for raw ingestion
+- **Retention**: Data is **immediately migrated to persistent** after validation
+- **Content**:
+  - `unstructured/images/raw/` → image stream files (temporary)
+  - `semi_structured/trends/raw/` → JSONL events (temporary)
+  - `structured/csv/` → raw batch files (temporary)
 
 #### Persistent layer
-- Represents the **processed Bronze layer (structured storage)**
-- Stores cleaned and enriched datasets:
-  - `lastfm/` → ingestion results from Last.fm  
-  - `musicbrainz/` → ISRC resolution data  
-  - `reccobeats/` → audio feature enrichment  
-- Data is stored in **Parquet format**, optimized for analytics  
+- **Purpose**: Long-term Bronze validated storage
+- **Content**:
+  - `unstructured/images/raw/` → migrated image files (validated, with metadata)
+  - `semi_structured/trends/raw/` → migrated JSONL events (validated, with metadata)
+  - `structured/` → batch processing results (Last.fm, MusicBrainz, ReccoBeats)
+
+#### Metadata layer
+- **Purpose**: Data catalog, lineage, and ingestion tracking
+- **Records stored as JSON** with:
+  - Ingestion timestamp (ISO 8601)
+  - Data type and format
+  - Source system
+  - Storage paths (temporal → persistent migration)
+  - Record count
+  - Custom attributes (topic, migration status, etc.)
+- **Location**: `metadata/{data_type}/{format}/` in Bronze bucket
 
 #### Data flow
 
@@ -202,24 +223,31 @@ Streaming (images, trends)
         ↓
 Kafka
         ↓
-Airflow consumers
+Airflow consumer DAG
         ↓
-Bronze / temporal
+Bronze / TEMPORAL (staging)
+        ↓
+    [MIGRATE]
+        ↓
+Bronze / PERSISTENT
+        ↓
+Record metadata → Bronze / METADATA
+        ↓
+   [CLEANUP: Temporal cleared]
 
 Batch APIs (Last.fm, MusicBrainz, ReccoBeats)
         ↓
 Airflow batch DAG
         ↓
-Bronze / temporal (CSV)
+Bronze / PERSISTENT (structured)
         ↓
-Processed → Bronze / persistent (Parquet)
+Record metadata
 ```
 
-This architecture clearly separates:
-- **raw ingestion (temporal)**  
-- **processed structured storage (persistent)**  
-
-and prepares the system for future Silver and Gold transformations.
+This ensures:
+- **Temporal** is a true temporary staging zone
+- **Unstructured & semi-structured data** are properly moved to persistent storage
+- **Metadata** tracks all ingestions for data governance and lineage
 
 ---
 
