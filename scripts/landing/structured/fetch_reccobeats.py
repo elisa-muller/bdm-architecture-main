@@ -147,44 +147,6 @@ def parse_feature_item(item: Dict) -> Dict:
     }
 
 
-def cast_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
-    string_cols = [
-        "rb_track_id",
-        "rb_href",
-        "rb_name",
-        "rb_artist",
-        "rb_isrc",
-        "rb_mode",
-        "rb_key",
-        "run_id",
-        "run_date",
-    ]
-
-    numeric_cols = [
-        "rb_danceability",
-        "rb_energy",
-        "rb_valence",
-        "rb_tempo",
-        "rb_acousticness",
-        "rb_instrumentalness",
-        "rb_liveness",
-        "rb_loudness",
-        "rb_speechiness",
-        "rb_time_signature",
-        "rb_duration_ms",
-    ]
-
-    for col in string_cols:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df
-
-
 def get_audio_features_batch(ids_batch: List[str]) -> List[Dict]:
     try:
         r = requests.get(
@@ -269,8 +231,6 @@ def flush_feature_batch_rows(batch_feature_rows: List[Dict], flush_number: int) 
 
     df_batch["run_id"] = run_id
     df_batch["run_date"] = run_date
-
-    df_batch = cast_feature_columns(df_batch)
 
     temporal_object = (
         f"temporal/structured/reccobeats/raw/"

@@ -194,39 +194,6 @@ def fetch_geo_tracks(country: str, max_pages: int = 20, limit: int = 50) -> list
     return rows
 
 
-def cast_raw_columns(df: pd.DataFrame) -> pd.DataFrame:
-    numeric_cols = [
-        "lastfm_duration",
-        "lastfm_listeners",
-        "lastfm_playcount",
-        "lastfm_rank",
-        "source_page",
-    ]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    string_cols = [
-        "run_id",
-        "run_date",
-        "ingested_at_utc",
-        "source_type",
-        "source_value",
-        "lastfm_track_name",
-        "lastfm_track_mbid",
-        "lastfm_artist_name",
-        "lastfm_artist_mbid",
-        "lastfm_url",
-        "lastfm_streamable",
-        "lastfm_image_url",
-    ]
-    for col in string_cols:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-
-    return df
-
-
 def upload_csv_to_minio(df: pd.DataFrame, bucket_name: str, object_name: str) -> None:
     csv_bytes = df.to_csv(index=False).encode("utf-8")
     data_stream = io.BytesIO(csv_bytes)
@@ -401,7 +368,6 @@ def main():
 
     # raw df
     df_raw = pd.DataFrame(all_rows)
-    df_raw = cast_raw_columns(df_raw)
 
     print(f"[Last.fm] Raw rows collected: {len(df_raw)}")
 
