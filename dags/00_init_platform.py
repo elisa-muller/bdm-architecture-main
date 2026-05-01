@@ -17,6 +17,7 @@ TOPIC_TRENDS_RAW = os.getenv("TOPIC_TRENDS_RAW", "music-trends-raw")
 
 BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
 TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
+EXPLOITATION_BUCKET = os.getenv("EXPLOITATION_BUCKET", "exploitation")
 
 
 @dag(
@@ -25,7 +26,7 @@ TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
     schedule=None,
     start_date=datetime.now(tz=timezone.utc) - timedelta(days=1),
     catchup=False,
-    tags=["init", "kafka", "minio", "bronze", "trusted"],
+    tags=["init", "kafka", "minio", "bronze", "trusted", "exploitation"],
 )
 def init_platform():
 
@@ -43,7 +44,7 @@ def init_platform():
             secure=secure,
         )
 
-        buckets = [BRONZE_BUCKET, TRUSTED_BUCKET]
+        buckets = [BRONZE_BUCKET, TRUSTED_BUCKET, EXPLOITATION_BUCKET]
         created_or_existing = []
 
         for bucket_name in buckets:
@@ -86,6 +87,16 @@ def init_platform():
             f"{TRUSTED_BUCKET}:structured/lastfm/delta/",
             f"{TRUSTED_BUCKET}:structured/musicbrainz/delta/",
             f"{TRUSTED_BUCKET}:structured/reccobeats/delta/",
+            f"{TRUSTED_BUCKET}:semi_structured/trends/delta/",
+            f"{TRUSTED_BUCKET}:unstructured/images/clean/",
+
+            # Exploitation
+            f"{EXPLOITATION_BUCKET}:structured/music_analytics/delta/",
+            f"{EXPLOITATION_BUCKET}:semi_structured/trends_analytics/delta/",
+            f"{EXPLOITATION_BUCKET}:unstructured/images/embeddings/",
+            f"{EXPLOITATION_BUCKET}:consumption/recommendations/",
+            f"{EXPLOITATION_BUCKET}:consumption/recommendations/image_context_events/",
+            f"{EXPLOITATION_BUCKET}:metadata/",
         ]
 
         created = []

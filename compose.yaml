@@ -25,14 +25,30 @@ x-airflow-common:
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS: 'kafka:9092'
 
+    # Spark
+    SPARK_MASTER_URL: 'spark://spark-master:7077'
+    SPARK_DRIVER_PYTHON: '/home/airflow/.local/bin/python'
+    SPARK_EXECUTOR_PYTHON: '/usr/bin/python3.12'
+    MILVUS_HOST: 'milvus-standalone'
+    MILVUS_PORT: '19530'
+    MILVUS_IMAGE_COLLECTION: 'image_clip_embeddings'
+    IMAGE_EMBEDDING_MODEL: 'openai/clip-vit-base-patch32'
+    IMAGE_EMBEDDING_DIM: '512'
+    HF_HOME: '/tmp/huggingface'
+    REALTIME_IMAGE_TRIGGER_SECONDS: '45'
+    REALTIME_IMAGE_MAX_OFFSETS_PER_TRIGGER: '1'
+
     # Project topics
     TOPIC_IMAGES_RAW: 'music-images-raw'
     TOPIC_TRENDS_RAW: 'music-trends-raw'
 
     # Bronze landing zone
     BRONZE_BUCKET: 'bronze'
+    TRUSTED_BUCKET: 'trusted'
+    EXPLOITATION_BUCKET: 'exploitation'
     BRONZE_IMAGES_PATH: 'music_images_raw'
     BRONZE_TRENDS_PATH: 'music_trends_raw'
+    TRUSTED_IMAGE_MAX_IMAGES: '50'
 
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
@@ -142,6 +158,140 @@ services:
         condition: service_healthy
     volumes:
       - ./config/kafkaui_config.yml:/etc/kafkaui/dynamic_config.yaml
+    restart: unless-stopped
+
+  spark-master:
+    build:
+      context: ./docker/spark
+      dockerfile: pyspark.Dockerfile
+    entrypoint: /opt/spark/sbin/start-master.sh
+    environment:
+      SPARK_MASTER_HOST: spark-master
+      SPARK_NO_DAEMONIZE: "true"
+      PYSPARK_PYTHON: /usr/bin/python3.12
+      PYSPARK_DRIVER_PYTHON: /usr/bin/python3.12
+      HF_HOME: /tmp/huggingface
+    ports:
+      - "7077:7077"
+      - "8082:8080"
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+      - ./data_sources:/opt/airflow/data_sources
+    restart: unless-stopped
+
+  spark-worker:
+    build:
+      context: ./docker/spark
+      dockerfile: pyspark.Dockerfile
+    entrypoint: /opt/spark/sbin/start-worker.sh
+    command: ["spark://spark-master:7077"]
+    environment:
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: "2"
+      SPARK_NO_DAEMONIZE: "true"
+      PYSPARK_PYTHON: /usr/bin/python3.12
+      PYSPARK_DRIVER_PYTHON: /usr/bin/python3.12
+      HF_HOME: /tmp/huggingface
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+      - ./data_sources:/opt/airflow/data_sources
+    depends_on:
+      - spark-master
+    restart: unless-stopped
+
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command: >
+      etcd
+      -advertise-client-urls=http://127.0.0.1:2379
+      -listen-client-urls=http://0.0.0.0:2379
+      --data-dir=/etcd
+    volumes:
+      - milvus_etcd:/etcd
+    restart: unless-stopped
+
+  milvus-minio:
+    image: minio/minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /minio_data
+    volumes:
+      - milvus_minio:/minio_data
+    restart: unless-stopped
+
+  milvus-standalone:
+    image: milvusdb/milvus:v2.5.4
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+      MINIO_ACCESS_KEY_ID: minioadmin
+      MINIO_SECRET_ACCESS_KEY: minioadmin
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    depends_on:
+      - milvus-etcd
+      - milvus-minio
+    restart: unless-stopped
+
+  image-realtime-embedding-stream:
+    build:
+      context: ./docker/spark
+      dockerfile: pyspark.Dockerfile
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - spark://spark-master:7077
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2
+      - --conf
+      - spark.pyspark.driver.python=/usr/bin/python3.12
+      - --conf
+      - spark.pyspark.python=/usr/bin/python3.12
+      - --conf
+      - spark.executorEnv.PYSPARK_PYTHON=/usr/bin/python3.12
+      - /opt/airflow/scripts/streaming/unstructured/realtime_image_embeddings_spark.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      TOPIC_IMAGES_RAW: music-images-raw
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      EXPLOITATION_BUCKET: exploitation
+      IMAGE_EMBEDDING_MODEL: openai/clip-vit-base-patch32
+      IMAGE_EMBEDDING_DIM: "512"
+      IMAGE_CONTEXT_TOP_K: "3"
+      IMAGE_CONTEXT_LABELS: party,night out,energetic,happy,chill,relaxing,sad,romantic,workout,travel,beach,study,urban,nature
+      IMAGE_CONTEXT_EVENTS_PREFIX: consumption/recommendations/image_context_events/
+      REALTIME_IMAGE_TRIGGER_SECONDS: "45"
+      REALTIME_IMAGE_MAX_OFFSETS_PER_TRIGGER: "1"
+      REALTIME_IMAGE_CHECKPOINT_PATH: /tmp/realtime-image-context-checkpoint
+      HF_HOME: /tmp/huggingface
+      HOME: /tmp
+      PYSPARK_PYTHON: /usr/bin/python3.12
+      PYSPARK_DRIVER_PYTHON: /usr/bin/python3.12
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+    depends_on:
+      kafka:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      minio:
+        condition: service_started
     restart: unless-stopped
 
   airflow-apiserver:
@@ -271,7 +421,7 @@ services:
     volumes:
       - ./scripts:/opt/airflow/scripts
       - ./data_sources:/opt/airflow/data_sources
-    command: python -u /opt/airflow/scripts/produce_images.py
+    command: python -u /opt/airflow/scripts/landing/unstructured/produce_images.py
     depends_on:
       kafka:
         condition: service_healthy
@@ -291,7 +441,7 @@ services:
       - ./data_sources:/opt/airflow/data_sources
     command:
       - -c
-      - uvicorn trends_api:app --host 0.0.0.0 --port 8000 --app-dir /opt/airflow/scripts
+      - uvicorn trends_api:app --host 0.0.0.0 --port 8000 --app-dir /opt/airflow/scripts/landing/semistructured
     depends_on:
       kafka:
         condition: service_healthy
@@ -313,7 +463,7 @@ services:
     volumes:
       - ./scripts:/opt/airflow/scripts
       - ./data_sources:/opt/airflow/data_sources
-    command: python /opt/airflow/scripts/produce_trends.py
+    command: python /opt/airflow/scripts/landing/semistructured/produce_trends.py
     depends_on:
       kafka:
         condition: service_healthy
@@ -325,3 +475,6 @@ volumes:
   postgres-db-volume:
   minio_data:
   airflow-logs:
+  milvus_etcd:
+  milvus_minio:
+  milvus_data:
