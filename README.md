@@ -119,6 +119,7 @@ Used to:
 | `consume_images_raw_to_bronze` | every 1 min | Ingest → temporal → migrate to persistent → record metadata |
 | `consume_trends_raw_to_bronze` | every 5 min | Ingest → temporal → migrate to persistent → record metadata |
 | `structured_batch` | daily | Batch ingestion + enrichment pipeline |
+| `trusted_trends_pipeline` | every 15 min | Spark cleaning of persistent semistructured trends into Trusted Delta |
 
 ---
 

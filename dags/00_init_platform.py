@@ -81,6 +81,7 @@ def init_platform():
             f"{BRONZE_BUCKET}:persistent/structured/lastfm/delta/",
             f"{BRONZE_BUCKET}:persistent/structured/musicbrainz/delta/",
             f"{BRONZE_BUCKET}:persistent/structured/reccobeats/delta/",
+            f"{BRONZE_BUCKET}:persistent/semi_structured/trends/raw/",
             f"{BRONZE_BUCKET}:persistent/semi_structured/trends/delta/",
 
             # Trusted
@@ -88,7 +89,9 @@ def init_platform():
             f"{TRUSTED_BUCKET}:structured/musicbrainz/delta/",
             f"{TRUSTED_BUCKET}:structured/reccobeats/delta/",
             f"{TRUSTED_BUCKET}:semi_structured/trends/delta/",
+            f"{TRUSTED_BUCKET}:semi_structured/trends/rejected/",
             f"{TRUSTED_BUCKET}:unstructured/images/clean/",
+            f"{TRUSTED_BUCKET}:metadata/semi_structured/trends/",
 
             # Exploitation
             f"{EXPLOITATION_BUCKET}:structured/music_analytics/delta/",
