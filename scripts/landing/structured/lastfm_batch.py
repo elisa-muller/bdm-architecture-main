@@ -55,9 +55,9 @@ countries = [
 ]
 
 per_page_limit = 50
-chart_pages = 1
-tag_pages = 1
-geo_pages = 1
+chart_pages = 1 #change depending on how many songs we want to ingest
+tag_pages = 1 #but if we put a lot it takes very long time
+geo_pages = 1 #so it's now set to 1
 sleep_seconds = 0.25
 
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

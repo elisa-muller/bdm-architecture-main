@@ -1,292 +1,489 @@
 from __future__ import annotations
 
+import json
 import os
+import uuid
 from datetime import datetime, timezone
+from typing import Iterable
 
-import pandas as pd
-from deltalake import DeltaTable, write_deltalake
-
-
-# Environment / storage configuration
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
-MINIO_ENDPOINT = MINIO_ENDPOINT.replace("http://", "").replace("https://", "").rstrip("/")
-
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
-MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
-
-BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
-TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
-
-BRONZE_LASTFM_DELTA_URI = (
-    f"s3://{BRONZE_BUCKET}/persistent/structured/lastfm/delta/tracks_delta"
+import boto3
+import pyarrow as pa
+from botocore.exceptions import ClientError
+from deltalake import write_deltalake
+from pyspark.sql import DataFrame, SparkSession, Window
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    BooleanType,
+    DoubleType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
 )
 
-TRUSTED_LASTFM_DELTA_URI = (
-    f"s3://{TRUSTED_BUCKET}/structured/lastfm/delta/tracks_clean_delta"
-)
 
-DELTA_STORAGE_OPTIONS = {
-    "AWS_ACCESS_KEY_ID": MINIO_ACCESS_KEY,
-    "AWS_SECRET_ACCESS_KEY": MINIO_SECRET_KEY,
-    "AWS_REGION": os.getenv("AWS_REGION", "us-east-1"),
-    "AWS_ENDPOINT_URL": f"http{'s' if MINIO_SECURE else ''}://{MINIO_ENDPOINT}",
-    "AWS_ALLOW_HTTP": "false" if MINIO_SECURE else "true",
-    "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+ENV_NAMES = [
+    "MINIO_ENDPOINT",
+    "MINIO_ACCESS_KEY",
+    "MINIO_SECRET_KEY",
+    "MINIO_ROOT_USER",
+    "MINIO_ROOT_PASSWORD",
+    "MINIO_SECURE",
+    "AWS_REGION",
+    "BRONZE_BUCKET",
+    "TRUSTED_BUCKET",
+    "BRONZE_TRACKS_PREFIX",
+    "TRUSTED_TRACKS_DELTA_URI",
+    "TRUSTED_TRACKS_REJECTED_PREFIX",
+    "TRUSTED_METADATA_PREFIX",
+    "SPARK_EXECUTOR_PYTHON",
+]
+
+REQUIRED_COLUMNS = {
+    "run_id",
+    "run_date",
+    "ingested_at_utc",
+    "source_type",
+    "source_value",
+    "source_page",
+    "lastfm_track_name",
+    "lastfm_track_mbid",
+    "lastfm_artist_name",
+    "lastfm_artist_mbid",
+    "lastfm_url",
+    "lastfm_duration",
+    "lastfm_streamable",
+    "lastfm_image_url",
+    "lastfm_listeners",
+    "lastfm_playcount",
+    "lastfm_rank",
 }
 
+BRONZE_SCHEMA = StructType(
+    [
+        StructField("run_id", StringType(), True),
+        StructField("run_date", StringType(), True),
+        StructField("ingested_at_utc", StringType(), True),
+        StructField("source_type", StringType(), True),
+        StructField("source_value", StringType(), True),
+        StructField("source_page", LongType(), True),
+        StructField("lastfm_track_name", StringType(), True),
+        StructField("lastfm_track_mbid", StringType(), True),
+        StructField("lastfm_artist_name", StringType(), True),
+        StructField("lastfm_artist_mbid", StringType(), True),
+        StructField("lastfm_url", StringType(), True),
+        StructField("lastfm_duration", LongType(), True),
+        StructField("lastfm_streamable", StringType(), True),
+        StructField("lastfm_image_url", StringType(), True),
+        StructField("lastfm_listeners", DoubleType(), True),
+        StructField("lastfm_playcount", DoubleType(), True),
+        StructField("lastfm_rank", DoubleType(), True),
+    ]
+)
 
-# Helpers
-def delta_table_exists(delta_uri: str) -> bool:
+FINAL_COLS = [
+    "trusted_track_key",
+    "track_mbid",
+    "artist_mbid",
+    "track_name",
+    "track_name_norm",
+    "artist_name",
+    "artist_name_norm",
+    "duration_seconds",
+    "is_streamable",
+    "url",
+    "image_url",
+    "listeners",
+    "playcount",
+    "rank",
+    "source_type",
+    "source_value",
+    "source_page",
+    "first_seen_run_id",
+    "first_seen_run_date",
+    "ingested_at_utc",
+    "trusted_processed_at_utc",
+    "trusted_source_zone",
+    "trusted_target_zone",
+]
+
+
+def env(name: str, default: str) -> str:
+    return os.getenv(name, default)
+
+
+def minio_endpoint_url() -> str:
+    endpoint = env("MINIO_ENDPOINT", "http://minio:9000")
+    if not endpoint.startswith("http"):
+        endpoint = "http://" + endpoint
+    return endpoint.rstrip("/")
+
+
+def build_s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=minio_endpoint_url(),
+        aws_access_key_id=env("MINIO_ACCESS_KEY", env("MINIO_ROOT_USER", "minioadmin")),
+        aws_secret_access_key=env("MINIO_SECRET_KEY", env("MINIO_ROOT_PASSWORD", "minioadmin")),
+    )
+
+
+def ensure_bucket_exists(s3, bucket_name: str) -> None:
     try:
-        DeltaTable(delta_uri, storage_options=DELTA_STORAGE_OPTIONS)
-        return True
-    except Exception:
-        return False
+        s3.head_bucket(Bucket=bucket_name)
+    except ClientError:
+        s3.create_bucket(Bucket=bucket_name)
 
 
-def load_delta_as_df(delta_uri: str) -> pd.DataFrame:
-    dt = DeltaTable(delta_uri, storage_options=DELTA_STORAGE_OPTIONS)
-    return dt.to_pandas()
+def storage_options() -> dict[str, str]:
+    endpoint = minio_endpoint_url()
+    secure = endpoint.startswith("https://")
+    return {
+        "AWS_ACCESS_KEY_ID": env("MINIO_ACCESS_KEY", env("MINIO_ROOT_USER", "minioadmin")),
+        "AWS_SECRET_ACCESS_KEY": env("MINIO_SECRET_KEY", env("MINIO_ROOT_PASSWORD", "minioadmin")),
+        "AWS_REGION": env("AWS_REGION", "us-east-1"),
+        "AWS_ENDPOINT_URL": endpoint,
+        "AWS_ALLOW_HTTP": "false" if secure else "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+    }
 
 
-def safe_strip(x):
-    if pd.isna(x):
-        return pd.NA
-    s = str(x).strip()
-    return pd.NA if s == "" else s
+def null_if_blank(column: str) -> F.Column:
+    trimmed = F.trim(F.col(column).cast("string"))
+    return F.when(trimmed == "", F.lit(None)).otherwise(trimmed)
 
 
-def normalize_bool_like(x):
-    if pd.isna(x):
-        return pd.NA
-
-    s = str(x).strip().lower()
-    if s in {"1", "true", "t", "yes", "y", "fulltrack"}:
-        return True
-    if s in {"0", "false", "f", "no", "n"}:
-        return False
-
-    return pd.NA
-
-
-def normalize_text_key(x) -> str:
-    if pd.isna(x):
-        return ""
-    return " ".join(str(x).strip().lower().split())
+def normalize_name(column: str) -> F.Column:
+    col = F.lower(F.trim(F.col(column).cast("string")))
+    col = F.regexp_replace(col, r"[àáâãäå]", "a")
+    col = F.regexp_replace(col, r"[èéêë]", "e")
+    col = F.regexp_replace(col, r"[ìíîï]", "i")
+    col = F.regexp_replace(col, r"[òóôõö]", "o")
+    col = F.regexp_replace(col, r"[ùúûü]", "u")
+    col = F.regexp_replace(col, r"ñ", "n")
+    col = F.regexp_replace(col, r"ç", "c")
+    col = F.regexp_replace(col, r"[^a-z0-9\s]", "")
+    col = F.regexp_replace(col, r"\s+", " ")
+    return F.trim(col)
 
 
-def cast_nullable_string(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for col in cols:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-    return df
+def parsed_bool(column: str) -> F.Column:
+    normalized = F.lower(null_if_blank(column))
+    return (
+        F.when(normalized.isin("true", "t", "1", "yes", "y", "fulltrack"), F.lit(True))
+        .when(normalized.isin("false", "f", "0", "no", "n"), F.lit(False))
+        .otherwise(F.lit(None).cast(BooleanType()))
+    )
 
 
-def cast_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    for col in cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+def add_quality_error(errors: list[F.Column], condition: F.Column, label: str) -> None:
+    errors.append(F.when(condition, F.lit(label)))
 
 
-# Cleaning
-def clean_lastfm_tracks(df: pd.DataFrame) -> pd.DataFrame:
-    required_cols = [
-        "track_key",
-        "lastfm_track_name",
-        "lastfm_track_mbid",
-        "lastfm_artist_name",
-        "lastfm_artist_mbid",
-        "lastfm_url",
-        "lastfm_duration",
-        "lastfm_streamable",
-        "lastfm_image_url",
-        "first_seen_run_id",
-        "first_seen_run_date",
-        "first_seen_ingested_at_utc",
-        "first_seen_source_type",
-        "first_seen_source_value",
-    ]
-    missing = [c for c in required_cols if c not in df.columns]
+def validate_schema(df: DataFrame) -> None:
+    missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
-        raise ValueError(f"Missing required columns in bronze Last.fm table: {missing}")
+        raise ValueError(f"Missing required bronze columns: {sorted(missing)}")
 
-    df = df.copy()
 
-    # Trim / normalize empties to null
+def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataFrame]:
+    df = raw_df
+
     string_cols = [
-        "track_key",
+        "run_id",
+        "run_date",
+        "ingested_at_utc",
+        "source_type",
+        "source_value",
         "lastfm_track_name",
         "lastfm_track_mbid",
         "lastfm_artist_name",
         "lastfm_artist_mbid",
         "lastfm_url",
-        "lastfm_streamable",
         "lastfm_image_url",
-        "first_seen_run_id",
-        "first_seen_run_date",
-        "first_seen_ingested_at_utc",
-        "first_seen_source_type",
-        "first_seen_source_value",
+        "lastfm_streamable",
     ]
+
     for col in string_cols:
-        df[col] = df[col].apply(safe_strip)
+        df = df.withColumn(col, null_if_blank(col))
 
-    # Numeric casting
-    df = cast_numeric(df, ["lastfm_duration"])
-
-    # Basic standardization
-    df["track_name"] = df["lastfm_track_name"]
-    df["track_mbid"] = df["lastfm_track_mbid"]
-    df["artist_name"] = df["lastfm_artist_name"]
-    df["artist_mbid"] = df["lastfm_artist_mbid"]
-    df["track_url"] = df["lastfm_url"]
-    df["image_url"] = df["lastfm_image_url"]
-
-    # Normalize streamable to boolean when possible
-    df["streamable"] = df["lastfm_streamable"].apply(normalize_bool_like)
-
-    # Create normalized helper fields for stable dedup / quality checks
-    df["track_name_norm"] = df["track_name"].apply(normalize_text_key)
-    df["artist_name_norm"] = df["artist_name"].apply(normalize_text_key)
-
-    # Rebuild canonical key in trusted
-    df["trusted_track_key"] = df.apply(
-        lambda row: (
-            f"mbid::{row['track_mbid']}"
-            if pd.notna(row["track_mbid"])
-            else f"name::{row['artist_name_norm']}::{row['track_name_norm']}"
-        ),
-        axis=1,
+    df = (
+        df
+        .withColumn("duration_seconds", F.expr("try_cast(lastfm_duration as BIGINT)"))
+        .withColumn("listeners", F.expr("try_cast(lastfm_listeners as BIGINT)"))
+        .withColumn("playcount", F.expr("try_cast(lastfm_playcount as BIGINT)"))
+        .withColumn("rank", F.expr("try_cast(lastfm_rank as BIGINT)"))
+        .withColumnRenamed("lastfm_track_name", "track_name")
+        .withColumnRenamed("lastfm_track_mbid", "track_mbid")
+        .withColumnRenamed("lastfm_artist_name", "artist_name")
+        .withColumnRenamed("lastfm_artist_mbid", "artist_mbid")
+        .withColumnRenamed("lastfm_url", "url")
+        .withColumnRenamed("lastfm_image_url", "image_url")
+        .withColumnRenamed("run_id", "first_seen_run_id")
+        .withColumnRenamed("run_date", "first_seen_run_date")
+        .withColumn("track_name_norm", normalize_name("track_name"))
+        .withColumn("artist_name_norm", normalize_name("artist_name"))
+        .withColumn("is_streamable", parsed_bool("lastfm_streamable"))
     )
 
-    # Quality flags
-    df["has_minimum_identity"] = (
-        df["track_mbid"].notna()
-        | (
-            df["track_name"].notna()
-            & df["artist_name"].notna()
-            & (df["track_name_norm"] != "")
-            & (df["artist_name_norm"] != "")
-        )
-    )
-
-    df["valid_duration"] = df["lastfm_duration"].isna() | (df["lastfm_duration"] >= 0)
-
-    df["is_valid_record"] = df["has_minimum_identity"] & df["valid_duration"]
-
-    # Keep only valid rows in trusted
-    df = df[df["is_valid_record"]].copy()
-
-    # Deduplicate:
-    # sort so earliest seen record survives for metadata consistency
-    df["first_seen_ingested_at_utc_dt"] = pd.to_datetime(
-        df["first_seen_ingested_at_utc"], errors="coerce", utc=True
-    )
-    df = df.sort_values(
-        by=["trusted_track_key", "first_seen_ingested_at_utc_dt"],
-        ascending=[True, True],
-        na_position="last",
-    )
-
-    df = df.drop_duplicates(subset=["trusted_track_key"], keep="first").reset_index(drop=True)
-
-    # Final curated schema
-    df["trusted_processed_at_utc"] = datetime.now(timezone.utc).isoformat()
-    df["trusted_source_zone"] = "bronze"
-    df["trusted_target_zone"] = "trusted"
-
-    final_cols = [
+    df = df.withColumn(
         "trusted_track_key",
-        "track_name",
-        "track_mbid",
-        "artist_name",
-        "artist_mbid",
-        "track_url",
-        "lastfm_duration",
-        "streamable",
-        "image_url",
-        "track_name_norm",
-        "artist_name_norm",
+        F.when(
+            F.col("track_mbid").isNotNull(),
+            F.concat(F.lit("mbid::"), F.col("track_mbid")),
+        ).otherwise(
+            F.when(
+                F.col("artist_name_norm").isNotNull()
+                & F.col("track_name_norm").isNotNull()
+                & (F.col("artist_name_norm") != "")
+                & (F.col("track_name_norm") != ""),
+                F.concat(
+                    F.lit("name::"),
+                    F.col("artist_name_norm"),
+                    F.lit("::"),
+                    F.col("track_name_norm"),
+                ),
+            )
+        ),
+    )
+
+    quality_errors: list[F.Column] = []
+
+    add_quality_error(quality_errors, F.col("trusted_track_key").isNull(), "missing_identity")
+    add_quality_error(quality_errors, F.col("track_name").isNull(), "missing_track_name")
+    add_quality_error(quality_errors, F.col("artist_name").isNull(), "missing_artist_name")
+    add_quality_error(quality_errors, F.col("first_seen_run_id").isNull(), "missing_run_id")
+    add_quality_error(quality_errors, F.col("first_seen_run_date").isNull(), "missing_run_date")
+    add_quality_error(quality_errors, F.col("ingested_at_utc").isNull(), "missing_ingested_at")
+    add_quality_error(quality_errors, F.col("source_type").isNull(), "missing_source_type")
+
+    add_quality_error(
+        quality_errors,
+        F.col("duration_seconds").isNotNull() & (F.col("duration_seconds") < 0),
+        "negative_duration",
+    )
+
+    for metric in ["listeners", "playcount", "rank"]:
+        add_quality_error(
+            quality_errors,
+            F.col(metric).isNotNull() & (F.col(metric) < 0),
+            f"negative_{metric}",
+        )
+
+    df = df.withColumn(
+        "quality_errors",
+        F.filter(F.array(*quality_errors), lambda item: item.isNotNull()),
+    ).withColumn("is_valid_record", F.size("quality_errors") == 0)
+
+    valid_candidates = df.filter(F.col("is_valid_record"))
+
+    rejected_df = df.filter(~F.col("is_valid_record")).select(
         "first_seen_run_id",
         "first_seen_run_date",
-        "first_seen_ingested_at_utc",
-        "first_seen_source_type",
-        "first_seen_source_value",
-        "trusted_processed_at_utc",
-        "trusted_source_zone",
-        "trusted_target_zone",
-    ]
-    df = df[final_cols].copy()
-
-    # Rename duration to a canonical name
-    df = df.rename(columns={"lastfm_duration": "duration_ms"})
-
-    # Final casts
-    df = cast_nullable_string(
-        df,
-        [
-            "trusted_track_key",
-            "track_name",
-            "track_mbid",
-            "artist_name",
-            "artist_mbid",
-            "track_url",
-            "image_url",
-            "track_name_norm",
-            "artist_name_norm",
-            "first_seen_run_id",
-            "first_seen_run_date",
-            "first_seen_ingested_at_utc",
-            "first_seen_source_type",
-            "first_seen_source_value",
-            "trusted_processed_at_utc",
-            "trusted_source_zone",
-            "trusted_target_zone",
-        ],
+        "track_mbid",
+        "track_name",
+        "artist_name",
+        "source_type",
+        "source_value",
+        "quality_errors",
     )
 
-    if "duration_ms" in df.columns:
-        df["duration_ms"] = pd.to_numeric(df["duration_ms"], errors="coerce")
+    dedup_window = Window.partitionBy("trusted_track_key").orderBy(
+        F.col("ingested_at_utc").asc_nulls_last(),
+        F.col("first_seen_run_id").asc_nulls_last(),
+    )
 
-    # pandas nullable boolean
-    if "streamable" in df.columns:
-        df["streamable"] = df["streamable"].astype("boolean")
+    valid_df = (
+        valid_candidates
+        .withColumn("_dedup_rank", F.row_number().over(dedup_window))
+        .filter(F.col("_dedup_rank") == 1)
+        .drop("_dedup_rank")
+        .withColumn("trusted_processed_at_utc", F.lit(processed_at))
+        .withColumn("trusted_source_zone", F.lit("bronze"))
+        .withColumn("trusted_target_zone", F.lit("trusted"))
+    )
 
-    return df
+    return valid_df.select(FINAL_COLS), rejected_df
 
 
+def write_rejected_partition(rows: Iterable) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+
+    s3 = build_s3_client()
+    trusted_bucket = env("TRUSTED_BUCKET", "trusted")
+    rejected_prefix = env("TRUSTED_TRACKS_REJECTED_PREFIX", "structured/lastfm/rejected/")
+    run_id = env("TRUSTED_TRACKS_RUN_ID", datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+
+    key = f"{rejected_prefix.rstrip('/')}/run_id={run_id}/part-{uuid.uuid4().hex}.jsonl"
+    body = "\n".join(json.dumps(row.asDict(recursive=True), ensure_ascii=False) for row in rows)
+
+    s3.put_object(
+        Bucket=trusted_bucket,
+        Key=key,
+        Body=body.encode("utf-8"),
+        ContentType="application/x-ndjson",
+    )
 
 
+def write_json(s3, bucket_name: str, key: str, payload: dict) -> None:
+    s3.put_object(
+        Bucket=bucket_name,
+        Key=key,
+        Body=json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
+    )
 
-# MAIN
 
-def main():
-    print("[Trusted][Last.fm] Starting trusted-zone cleaning for tracks...")
+def write_delta_from_rows(delta_uri: str, df: DataFrame) -> int:
+    rows = [row.asDict(recursive=True) for row in df.collect()]
 
-    if not delta_table_exists(BRONZE_LASTFM_DELTA_URI):
-        raise RuntimeError(
-            f"Bronze Last.fm Delta table does not exist: {BRONZE_LASTFM_DELTA_URI}"
+    schema = pa.schema(
+        [
+            pa.field("trusted_track_key", pa.string()),
+            pa.field("track_mbid", pa.string()),
+            pa.field("artist_mbid", pa.string()),
+            pa.field("track_name", pa.string()),
+            pa.field("track_name_norm", pa.string()),
+            pa.field("artist_name", pa.string()),
+            pa.field("artist_name_norm", pa.string()),
+            pa.field("duration_seconds", pa.int64()),
+            pa.field("is_streamable", pa.bool_()),
+            pa.field("url", pa.string()),
+            pa.field("image_url", pa.string()),
+            pa.field("listeners", pa.int64()),
+            pa.field("playcount", pa.int64()),
+            pa.field("rank", pa.int64()),
+            pa.field("source_type", pa.string()),
+            pa.field("source_value", pa.string()),
+            pa.field("source_page", pa.int64()),
+            pa.field("first_seen_run_id", pa.string()),
+            pa.field("first_seen_run_date", pa.string()),
+            pa.field("ingested_at_utc", pa.string()),
+            pa.field("trusted_processed_at_utc", pa.string()),
+            pa.field("trusted_source_zone", pa.string()),
+            pa.field("trusted_target_zone", pa.string()),
+        ]
+    )
+
+    table = pa.Table.from_pylist(rows, schema=schema)
+
+    write_deltalake(
+        delta_uri,
+        table,
+        mode="overwrite",
+        partition_by=["first_seen_run_date"],
+        storage_options=storage_options(),
+    )
+
+    return len(rows)
+
+
+def build_spark(processed_at: str, run_id: str) -> SparkSession:
+    builder = SparkSession.builder.appName("trusted-lastfm-tracks-cleaning")
+
+    executor_python = env("SPARK_EXECUTOR_PYTHON", "/usr/bin/python3.12")
+    builder = builder.config("spark.pyspark.python", executor_python)
+    builder = builder.config("spark.executorEnv.PYSPARK_PYTHON", executor_python)
+
+    for name in ENV_NAMES:
+        value = os.getenv(name)
+        if value is not None:
+            builder = builder.config(f"spark.executorEnv.{name}", value)
+
+    builder = builder.config("spark.executorEnv.TRUSTED_TRACKS_PROCESSED_AT", processed_at)
+    builder = builder.config("spark.executorEnv.TRUSTED_TRACKS_RUN_ID", run_id)
+
+    return builder.getOrCreate()
+
+
+def main() -> None:
+    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    trusted_bucket = env("TRUSTED_BUCKET", "trusted")
+
+    bronze_prefix = env(
+        "BRONZE_TRACKS_PREFIX",
+        "persistent/structured/lastfm/delta/tracks_delta/",
+    )
+
+    trusted_delta_uri = env(
+        "TRUSTED_TRACKS_DELTA_URI",
+        f"s3://{trusted_bucket}/structured/lastfm/delta/tracks_clean_delta",
+    )
+
+    metadata_prefix = env("TRUSTED_METADATA_PREFIX", "metadata/structured/lastfm/")
+    partitions = int(env("TRUSTED_TRACKS_SPARK_PARTITIONS", "4"))
+
+    processed_at = datetime.now(timezone.utc).isoformat()
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    os.environ["TRUSTED_TRACKS_RUN_ID"] = run_id
+    os.environ["TRUSTED_TRACKS_PROCESSED_AT"] = processed_at
+
+    print("[Trusted][Last.fm][Spark] Starting track cleaning...")
+    print(f"[Trusted][Last.fm][Spark] Source: s3://{bronze_bucket}/{bronze_prefix}")
+    print(f"[Trusted][Last.fm][Spark] Target: {trusted_delta_uri}")
+
+    s3 = build_s3_client()
+    ensure_bucket_exists(s3, trusted_bucket)
+
+    spark = build_spark(processed_at, run_id)
+    spark.sparkContext.setLogLevel("WARN")
+
+    try:
+        raw_df = (
+            spark.read
+            .schema(BRONZE_SCHEMA)
+            .parquet(f"s3a://{bronze_bucket}/{bronze_prefix}")
+            .repartition(partitions)
         )
 
-    print(f"[Trusted][Last.fm] Reading bronze table: {BRONZE_LASTFM_DELTA_URI}")
-    df_bronze = load_delta_as_df(BRONZE_LASTFM_DELTA_URI)
-    print(f"[Trusted][Last.fm] Rows read from bronze: {len(df_bronze)}")
+        validate_schema(raw_df)
 
-    df_clean = clean_lastfm_tracks(df_bronze)
-    print(f"[Trusted][Last.fm] Rows after trusted cleaning: {len(df_clean)}")
+        raw_count = raw_df.count()
 
-    # overwrite is fine here: trusted is rebuilt from bronze checkpoint
-    write_deltalake(
-        TRUSTED_LASTFM_DELTA_URI,
-        df_clean,
-        mode="overwrite",
-        storage_options=DELTA_STORAGE_OPTIONS,
+        valid_df, rejected_df = clean_tracks(raw_df, processed_at)
+        valid_df = valid_df.cache()
+        rejected_df = rejected_df.cache()
+
+        valid_count = valid_df.count()
+        rejected_count = rejected_df.count()
+        duplicates_removed = max(0, raw_count - rejected_count - valid_count)
+
+        if rejected_count > 0:
+            rejected_df.foreachPartition(write_rejected_partition)
+
+        rows_written = write_delta_from_rows(trusted_delta_uri, valid_df)
+
+    finally:
+        spark.stop()
+
+    report = {
+        "run_id": run_id,
+        "processed_at_utc": processed_at,
+        "engine": "apache_spark",
+        "source": f"s3://{bronze_bucket}/{bronze_prefix}",
+        "target": trusted_delta_uri,
+        "raw_records": raw_count,
+        "valid_records_written": rows_written,
+        "invalid_records_rejected": rejected_count,
+        "duplicates_removed": duplicates_removed,
+        "spark_partitions": partitions,
+        "required_columns": sorted(REQUIRED_COLUMNS),
+        "final_columns": FINAL_COLS,
+    }
+
+    report_key = f"{metadata_prefix.rstrip('/')}/clean_tracks_spark_run_{run_id}.json"
+    write_json(s3, trusted_bucket, report_key, report)
+
+    print(
+        "[Trusted][Last.fm][Spark] "
+        f"raw={raw_count}, written={rows_written}, rejected={rejected_count}, "
+        f"duplicates_removed={duplicates_removed}"
     )
-
-    print(f"[Trusted][Last.fm] Trusted Delta written to: {TRUSTED_LASTFM_DELTA_URI}")
-    print("[Trusted][Last.fm] Done.")
+    print(f"[Trusted][Last.fm][Spark] Report: s3://{trusted_bucket}/{report_key}")
+    print("[Trusted][Last.fm][Spark] Done.")
 
 
 if __name__ == "__main__":

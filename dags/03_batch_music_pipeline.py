@@ -51,7 +51,7 @@ def structured_batch():
         task_id="extract_lastfm_raw",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {LANDING_STRUCTURED_DIR}/lastfm_batch.py"  # 👈 era LANDING_SCRIPTS_DIR
+            f"python {LANDING_STRUCTURED_DIR}/lastfm_batch.py" 
         ),
         env=COMMON_ENV,
     )
@@ -60,7 +60,7 @@ def structured_batch():
         task_id="resolve_isrc_musicbrainz",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {LANDING_STRUCTURED_DIR}/musicbrainz_to_isrc.py"  # 👈
+            f"python {LANDING_STRUCTURED_DIR}/musicbrainz_to_isrc.py" 
         ),
         env=COMMON_ENV,
     )
@@ -69,7 +69,7 @@ def structured_batch():
         task_id="fetch_reccobeats_features",
         bash_command=(
             f"cd {PROJECT_DIR} && "
-            f"python {LANDING_STRUCTURED_DIR}/fetch_reccobeats.py"  # 👈
+            f"python {LANDING_STRUCTURED_DIR}/fetch_reccobeats.py" 
         ),
         env=COMMON_ENV,
     )
