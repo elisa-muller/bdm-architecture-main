@@ -30,20 +30,15 @@ COMMON_ENV = {
     ),
     "BRONZE_BUCKET": os.getenv("BRONZE_BUCKET", "bronze"),
     "TRUSTED_BUCKET": os.getenv("TRUSTED_BUCKET", "trusted"),
-    "SPARK_MASTER_URL": os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077"),
-    "SPARK_DRIVER_PYTHON": os.getenv(
-        "SPARK_DRIVER_PYTHON",
-        "/home/airflow/.local/bin/python",
-    ),
     "SPARK_EXECUTOR_PYTHON": os.getenv("SPARK_EXECUTOR_PYTHON", "/usr/bin/python3.12"),
 }
 
 
 @dag(
     dag_id="trusted_clean_tracks_pipeline",
-    description="Run Spark job to clean structured tracks into the Trusted Zone.",
+    description="Clean structured tracks into the Trusted Zone.",
     start_date=datetime(2025, 1, 1),
-    schedule=None,  # manual execution only
+    schedule=None,
     catchup=False,
     default_args={
         "retries": 1,
@@ -53,17 +48,8 @@ COMMON_ENV = {
 )
 def trusted_clean_tracks_pipeline():
     clean_tracks_task = BashOperator(
-        task_id="spark_clean_tracks_to_trusted",
-        bash_command=(
-            f"cd {PROJECT_DIR} && "
-            f"spark-submit "
-            f"--master {COMMON_ENV['SPARK_MASTER_URL']} "
-            f"--conf spark.pyspark.driver.python={COMMON_ENV['SPARK_DRIVER_PYTHON']} "
-            f"--conf spark.pyspark.python={COMMON_ENV['SPARK_EXECUTOR_PYTHON']} "
-            f"--conf spark.executorEnv.PYSPARK_PYTHON={COMMON_ENV['SPARK_EXECUTOR_PYTHON']} "
-            f"--packages org.apache.hadoop:hadoop-aws:3.4.1 "
-            f"{CLEAN_TRACKS_SCRIPT}"
-        ),
+        task_id="clean_tracks_to_trusted",
+        bash_command=f"cd {PROJECT_DIR} && python {CLEAN_TRACKS_SCRIPT}",
         env=COMMON_ENV,
     )
 

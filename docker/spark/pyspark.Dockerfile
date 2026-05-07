@@ -10,7 +10,7 @@ RUN set -ex; \
     ln -sf /usr/bin/python3.12 /usr/bin/python3; \
     curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py; \
     python3.12 /tmp/get-pip.py; \
-    python3.12 -m pip install --no-cache-dir boto3 Pillow torch torchvision transformers pymilvus==2.5.4; \
+    python3.12 -m pip install --no-cache-dir boto3 Pillow pymilvus==2.5.4 pyspark pyarrow deltalake; \
     rm -rf /var/lib/apt/lists/* /tmp/get-pip.py
 
 ENV PYSPARK_PYTHON=/usr/bin/python3.12

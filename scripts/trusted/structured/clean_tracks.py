@@ -9,17 +9,10 @@ from typing import Iterable
 import boto3
 import pyarrow as pa
 from botocore.exceptions import ClientError
-from deltalake import write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql.types import (
-    BooleanType,
-    DoubleType,
-    LongType,
-    StringType,
-    StructField,
-    StructType,
-)
+from pyspark.sql.types import BooleanType
 
 
 ENV_NAMES = [
@@ -58,28 +51,6 @@ REQUIRED_COLUMNS = {
     "lastfm_playcount",
     "lastfm_rank",
 }
-
-BRONZE_SCHEMA = StructType(
-    [
-        StructField("run_id", StringType(), True),
-        StructField("run_date", StringType(), True),
-        StructField("ingested_at_utc", StringType(), True),
-        StructField("source_type", StringType(), True),
-        StructField("source_value", StringType(), True),
-        StructField("source_page", LongType(), True),
-        StructField("lastfm_track_name", StringType(), True),
-        StructField("lastfm_track_mbid", StringType(), True),
-        StructField("lastfm_artist_name", StringType(), True),
-        StructField("lastfm_artist_mbid", StringType(), True),
-        StructField("lastfm_url", StringType(), True),
-        StructField("lastfm_duration", LongType(), True),
-        StructField("lastfm_streamable", StringType(), True),
-        StructField("lastfm_image_url", StringType(), True),
-        StructField("lastfm_listeners", DoubleType(), True),
-        StructField("lastfm_playcount", DoubleType(), True),
-        StructField("lastfm_rank", DoubleType(), True),
-    ]
-)
 
 FINAL_COLS = [
     "trusted_track_key",
@@ -138,6 +109,7 @@ def ensure_bucket_exists(s3, bucket_name: str) -> None:
 def storage_options() -> dict[str, str]:
     endpoint = minio_endpoint_url()
     secure = endpoint.startswith("https://")
+
     return {
         "AWS_ACCESS_KEY_ID": env("MINIO_ACCESS_KEY", env("MINIO_ROOT_USER", "minioadmin")),
         "AWS_SECRET_ACCESS_KEY": env("MINIO_SECRET_KEY", env("MINIO_ROOT_PASSWORD", "minioadmin")),
@@ -204,12 +176,11 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         "lastfm_streamable",
     ]
 
-    for col in string_cols:
-        df = df.withColumn(col, null_if_blank(col))
+    for col_name in string_cols:
+        df = df.withColumn(col_name, null_if_blank(col_name))
 
     df = (
-        df
-        .withColumn("duration_seconds", F.expr("try_cast(lastfm_duration as BIGINT)"))
+        df.withColumn("duration_seconds", F.expr("try_cast(lastfm_duration as BIGINT)"))
         .withColumn("listeners", F.expr("try_cast(lastfm_listeners as BIGINT)"))
         .withColumn("playcount", F.expr("try_cast(lastfm_playcount as BIGINT)"))
         .withColumn("rank", F.expr("try_cast(lastfm_rank as BIGINT)"))
@@ -275,8 +246,6 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         F.filter(F.array(*quality_errors), lambda item: item.isNotNull()),
     ).withColumn("is_valid_record", F.size("quality_errors") == 0)
 
-    valid_candidates = df.filter(F.col("is_valid_record"))
-
     rejected_df = df.filter(~F.col("is_valid_record")).select(
         "first_seen_run_id",
         "first_seen_run_date",
@@ -294,7 +263,7 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
     )
 
     valid_df = (
-        valid_candidates
+        df.filter(F.col("is_valid_record"))
         .withColumn("_dedup_rank", F.row_number().over(dedup_window))
         .filter(F.col("_dedup_rank") == 1)
         .drop("_dedup_rank")
@@ -398,6 +367,21 @@ def build_spark(processed_at: str, run_id: str) -> SparkSession:
     return builder.getOrCreate()
 
 
+def read_bronze_delta_as_spark(spark: SparkSession, delta_uri: str, partitions: int) -> DataFrame:
+    bronze_table = DeltaTable(
+        delta_uri,
+        storage_options=storage_options(),
+    )
+
+    arrow_table = bronze_table.to_pyarrow_table()
+
+    if arrow_table.num_rows == 0:
+        return spark.createDataFrame([], schema=None)
+
+    pandas_df = arrow_table.to_pandas()
+    return spark.createDataFrame(pandas_df).repartition(partitions)
+
+
 def main() -> None:
     bronze_bucket = env("BRONZE_BUCKET", "bronze")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
@@ -406,6 +390,8 @@ def main() -> None:
         "BRONZE_TRACKS_PREFIX",
         "persistent/structured/lastfm/delta/tracks_delta/",
     )
+
+    bronze_delta_uri = f"s3://{bronze_bucket}/{bronze_prefix.rstrip('/')}"
 
     trusted_delta_uri = env(
         "TRUSTED_TRACKS_DELTA_URI",
@@ -422,7 +408,7 @@ def main() -> None:
     os.environ["TRUSTED_TRACKS_PROCESSED_AT"] = processed_at
 
     print("[Trusted][Last.fm][Spark] Starting track cleaning...")
-    print(f"[Trusted][Last.fm][Spark] Source: s3://{bronze_bucket}/{bronze_prefix}")
+    print(f"[Trusted][Last.fm][Spark] Source: {bronze_delta_uri}")
     print(f"[Trusted][Last.fm][Spark] Target: {trusted_delta_uri}")
 
     s3 = build_s3_client()
@@ -432,12 +418,7 @@ def main() -> None:
     spark.sparkContext.setLogLevel("WARN")
 
     try:
-        raw_df = (
-            spark.read
-            .schema(BRONZE_SCHEMA)
-            .parquet(f"s3a://{bronze_bucket}/{bronze_prefix}")
-            .repartition(partitions)
-        )
+        raw_df = read_bronze_delta_as_spark(spark, bronze_delta_uri, partitions)
 
         validate_schema(raw_df)
 
@@ -462,8 +443,8 @@ def main() -> None:
     report = {
         "run_id": run_id,
         "processed_at_utc": processed_at,
-        "engine": "apache_spark",
-        "source": f"s3://{bronze_bucket}/{bronze_prefix}",
+        "engine": "apache_spark_python_deltalake",
+        "source": bronze_delta_uri,
         "target": trusted_delta_uri,
         "raw_records": raw_count,
         "valid_records_written": rows_written,
