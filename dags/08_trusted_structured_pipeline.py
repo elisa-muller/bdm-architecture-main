@@ -17,6 +17,22 @@ CLEAN_TRACKS_SCRIPT = os.path.join(
     "clean_tracks.py",
 )
 
+CLEAN_ISRC_SCRIPT = os.path.join(
+    PROJECT_DIR,
+    "scripts",
+    "trusted",
+    "structured",
+    "clean_isrc.py",
+)
+
+CLEAN_RECCOBEATS_SCRIPT = os.path.join(
+    PROJECT_DIR,
+    "scripts",
+    "trusted",
+    "structured",
+    "clean_reccobeats.py",
+)
+
 COMMON_ENV = {
     **os.environ,
     "MINIO_ENDPOINT": os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
@@ -35,8 +51,8 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="trusted_clean_tracks_pipeline",
-    description="Clean structured tracks into the Trusted Zone.",
+    dag_id="trusted_structured_cleaning_pipeline",
+    description="Clean structured Last.fm, MusicBrainz ISRC and ReccoBeats data into the Trusted Zone.",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
@@ -44,16 +60,28 @@ COMMON_ENV = {
         "retries": 1,
         "retry_delay": timedelta(minutes=2),
     },
-    tags=["trusted", "structured", "tracks", "spark", "minio"],
+    tags=["trusted", "structured", "spark", "minio"],
 )
-def trusted_clean_tracks_pipeline():
+def trusted_structured_cleaning_pipeline():
     clean_tracks_task = BashOperator(
         task_id="clean_tracks_to_trusted",
         bash_command=f"cd {PROJECT_DIR} && python {CLEAN_TRACKS_SCRIPT}",
         env=COMMON_ENV,
     )
 
-    clean_tracks_task
+    clean_isrc_task = BashOperator(
+        task_id="clean_isrc_to_trusted",
+        bash_command=f"cd {PROJECT_DIR} && python {CLEAN_ISRC_SCRIPT}",
+        env=COMMON_ENV,
+    )
+
+    clean_reccobeats_task = BashOperator(
+        task_id="clean_reccobeats_to_trusted",
+        bash_command=f"cd {PROJECT_DIR} && python {CLEAN_RECCOBEATS_SCRIPT}",
+        env=COMMON_ENV,
+    )
+
+    clean_tracks_task >> clean_isrc_task >> clean_reccobeats_task
 
 
-trusted_clean_tracks_pipeline()
+trusted_structured_cleaning_pipeline()
