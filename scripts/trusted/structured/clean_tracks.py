@@ -11,7 +11,6 @@ from botocore.exceptions import ClientError
 from deltalake import DeltaTable, write_deltalake
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
-from pyspark.sql.types import BooleanType
 
 
 ENV_NAMES = [
@@ -27,7 +26,7 @@ REQUIRED_COLUMNS = {
     "run_id", "run_date", "ingested_at_utc", "source_type", "source_value",
     "source_page", "lastfm_track_name", "lastfm_track_mbid",
     "lastfm_artist_name", "lastfm_artist_mbid", "lastfm_url",
-    "lastfm_duration", "lastfm_streamable", "lastfm_image_url",
+    "lastfm_duration", "lastfm_image_url",
 }
 
 FINAL_COLS = [
@@ -39,7 +38,6 @@ FINAL_COLS = [
     "artist_name",
     "artist_name_norm",
     "duration_seconds",
-    "is_streamable",
     "url",
     "image_url",
     "source_type",
@@ -104,7 +102,13 @@ def clean_string(column: str) -> F.Column:
 
 
 def normalize_name(column: str) -> F.Column:
-    col = F.lower(F.trim(F.col(column).cast("string")))
+    raw = clean_string(column)
+
+    has_non_roman_script = raw.rlike(
+        r"[\p{InHiragana}\p{InKatakana}\p{InCJK_Unified_Ideographs}\p{InHangul_Syllables}]"
+    )
+
+    col = F.lower(F.trim(raw))
     col = F.regexp_replace(col, r"[àáâãäå]", "a")
     col = F.regexp_replace(col, r"[èéêë]", "e")
     col = F.regexp_replace(col, r"[ìíîï]", "i")
@@ -116,15 +120,11 @@ def normalize_name(column: str) -> F.Column:
     col = F.regexp_replace(col, r"\s+", " ")
     col = F.trim(col)
 
-    return F.when(col == "", F.lit(None)).otherwise(col)
-
-
-def parsed_bool(column: str) -> F.Column:
-    normalized = F.lower(clean_string(column))
     return (
-        F.when(normalized.isin("true", "t", "1", "yes", "y", "fulltrack"), F.lit(True))
-        .when(normalized.isin("false", "f", "0", "no", "n"), F.lit(False))
-        .otherwise(F.lit(None).cast(BooleanType()))
+        F.when(raw.isNull(), F.lit(None))
+        .when(has_non_roman_script, raw)
+        .when(col == "", raw)
+        .otherwise(col)
     )
 
 
@@ -144,7 +144,7 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
     for col_name in [
         "run_id", "run_date", "ingested_at_utc", "source_type", "source_value",
         "lastfm_track_name", "lastfm_track_mbid", "lastfm_artist_name",
-        "lastfm_artist_mbid", "lastfm_url", "lastfm_image_url", "lastfm_streamable",
+        "lastfm_artist_mbid", "lastfm_url", "lastfm_image_url",
     ]:
         df = df.withColumn(col_name, clean_string(col_name))
 
@@ -158,7 +158,6 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         .withColumnRenamed("lastfm_image_url", "image_url")
         .withColumn("track_name_norm", normalize_name("track_name"))
         .withColumn("artist_name_norm", normalize_name("artist_name"))
-        .withColumn("is_streamable", parsed_bool("lastfm_streamable"))
     )
 
     df = df.withColumn(
@@ -278,7 +277,6 @@ def track_schema() -> pa.Schema:
             pa.field("artist_name", pa.string()),
             pa.field("artist_name_norm", pa.string()),
             pa.field("duration_seconds", pa.int64()),
-            pa.field("is_streamable", pa.bool_()),
             pa.field("url", pa.string()),
             pa.field("image_url", pa.string()),
             pa.field("source_type", pa.string()),
@@ -309,7 +307,7 @@ def write_delta_from_dicts(delta_uri: str, rows: list[dict]) -> int:
 def build_spark(processed_at: str, run_id: str) -> SparkSession:
     builder = (
         SparkSession.builder
-        .appName("trusted-lastfm-tracks-cleanigit pung")
+        .appName("trusted-lastfm-tracks-cleaning")
         .config("spark.driver.memory", env("SPARK_DRIVER_MEMORY", "512m"))
         .config("spark.executor.memory", env("SPARK_EXECUTOR_MEMORY", "512m"))
         .config("spark.sql.shuffle.partitions", env("SPARK_SQL_SHUFFLE_PARTITIONS", "2"))
