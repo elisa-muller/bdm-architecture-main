@@ -278,7 +278,6 @@ def build_post(row: dict) -> dict:
         "isrc": row["isrc"],
         "caption": caption,
         "hashtags": hashtags,
-        "scene": scene,
         "region": random.choice(REGIONS),
         "is_viral": is_viral,
         "views": views,

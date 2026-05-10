@@ -41,7 +41,6 @@ SOURCE_FIELDS = [
     "isrc",
     "caption",
     "hashtags",
-    "scene",
     "region",
     "is_viral",
     "views",
@@ -60,7 +59,6 @@ FIELD_ALIASES = {
     "isrc": ["isrc", "ISRC"],
     "caption": ["caption", "text", "description"],
     "hashtags": ["hashtags", "tags", "hash_tags"],
-    "scene": ["scene", "context", "mood"],
     "region": ["region", "country", "market"],
     "is_viral": ["is_viral", "viral", "isViral"],
     "views": ["views", "view_count", "viewCount"],
@@ -68,17 +66,6 @@ FIELD_ALIASES = {
     "comments": ["comments", "comment_count", "commentCount"],
     "shares": ["shares", "share_count", "shareCount"],
 }
-
-SCENES = [
-    "beach",
-    "party",
-    "cozy",
-    "gym",
-    "travel",
-    "urban",
-    "emotional",
-    "nostalgic",
-]
 
 REGIONS = ["US", "ES", "FR", "DE", "BR", "UK", "MX", "IT", "JP", "KR"]
 
@@ -284,7 +271,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
 
     df = (
         df.withColumn("isrc", F.upper(F.regexp_replace("isrc", r"[-\s]", "")))
-        .withColumn("scene", F.lower("scene"))
         .withColumn("region", F.upper("region"))
         .withColumn("is_viral", parsed_bool("is_viral_raw"))
         .withColumn("views", F.expr("try_cast(views_raw as BIGINT)"))
@@ -350,11 +336,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
     )
     add_quality_error(
         quality_errors,
-        F.col("scene").isNull() | ~F.col("scene").isin(SCENES),
-        "invalid_scene",
-    )
-    add_quality_error(
-        quality_errors,
         F.col("region").isNull() | ~F.col("region").isin(REGIONS),
         "invalid_region",
     )
@@ -414,7 +395,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         "caption",
         "hashtags",
         "hashtag_count",
-        "scene",
         "region",
         "is_viral",
         "views",
@@ -486,7 +466,6 @@ def write_delta_from_rows(delta_uri: str, df: DataFrame) -> int:
             pa.field("caption", pa.string()),
             pa.field("hashtags", pa.list_(pa.string())),
             pa.field("hashtag_count", pa.int32()),
-            pa.field("scene", pa.string()),
             pa.field("region", pa.string()),
             pa.field("is_viral", pa.bool_()),
             pa.field("views", pa.int64()),
@@ -604,7 +583,6 @@ def main() -> None:
         "duplicates_removed": duplicates_removed,
         "spark_partitions": partitions,
         "schema_fields": SOURCE_FIELDS,
-        "valid_scenes": SCENES,
         "valid_regions": REGIONS,
     }
 
