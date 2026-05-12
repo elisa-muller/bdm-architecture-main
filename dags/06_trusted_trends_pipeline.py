@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from airflow.decorators import dag
 from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 
 PROJECT_DIR = os.getenv("PROJECT_DIR", "/opt/airflow")
@@ -79,7 +80,16 @@ def trusted_trends_pipeline():
         env=COMMON_ENV,
     )
 
-    clean_trends_task
+    trigger_exploitation_task = TriggerDagRunOperator(
+        task_id="trigger_exploitation_trends_song_aggregates",
+        trigger_dag_id="exploitation_trends_song_aggregates_pipeline",
+        trigger_run_id="trusted_trends__{{ run_id }}",
+        conf={"source_dag_run_id": "{{ run_id }}"},
+        reset_dag_run=False,
+        skip_when_already_exists=True,
+    )
+
+    clean_trends_task >> trigger_exploitation_task
 
 
 trusted_trends_pipeline()
