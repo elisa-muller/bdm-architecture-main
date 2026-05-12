@@ -280,14 +280,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         .withColumn("event_timestamp", F.expr("try_to_timestamp(event_ts)"))
         .withColumn("event_ts_utc", F.date_format("event_timestamp", "yyyy-MM-dd'T'HH:mm:ss'Z'"))
         .withColumn("event_date", F.to_date("event_timestamp").cast("string"))
-        .withColumn(
-            "source_ingest_date",
-            F.regexp_extract("source_key", r"ingest_date=([^/]+)", 1),
-        )
-        .withColumn(
-            "source_ingest_hour",
-            F.regexp_extract("source_key", r"ingest_hour=([^/]+)", 1),
-        )
     )
 
     df = (
@@ -295,18 +287,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
             "caption",
             F.when(F.col("caption").isNull(), F.lit(None)).otherwise(
                 F.regexp_replace(F.col("caption"), r"\s+", " ")
-            ),
-        )
-        .withColumn(
-            "trend_event_key",
-            F.sha2(F.concat_ws("||", "post_id", "event_ts", "user_id"), 256),
-        )
-        .withColumn("hashtag_count", F.size("hashtags"))
-        .withColumn("engagement_total", F.col("likes") + F.col("comments") + F.col("shares"))
-        .withColumn(
-            "engagement_rate",
-            F.when(F.col("views") > 0, F.col("engagement_total") / F.col("views")).otherwise(
-                F.lit(None).cast("double")
             ),
         )
     )
@@ -339,7 +319,7 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         F.col("region").isNull() | ~F.col("region").isin(REGIONS),
         "invalid_region",
     )
-    add_quality_error(quality_errors, F.col("hashtag_count") < 1, "missing_hashtags")
+    add_quality_error(quality_errors, F.size("hashtags") < 1, "missing_hashtags")
     add_quality_error(quality_errors, F.col("is_viral").isNull(), "invalid_is_viral")
 
     for field in ["views", "likes", "comments", "shares"]:
@@ -368,8 +348,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         .filter(F.col("_dedup_rank") == 1)
         .drop("_dedup_rank")
         .withColumn("trusted_processed_at_utc", F.lit(processed_at))
-        .withColumn("trusted_source_zone", F.lit("bronze"))
-        .withColumn("trusted_target_zone", F.lit("trusted"))
     )
 
     rejected_df = df.filter(~F.col("is_valid_record")).select(
@@ -382,7 +360,6 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
     )
 
     final_cols = [
-        "trend_event_key",
         "post_id",
         "event_ts",
         "event_ts_utc",
@@ -394,24 +371,16 @@ def clean_trends(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         "isrc",
         "caption",
         "hashtags",
-        "hashtag_count",
         "region",
         "is_viral",
         "views",
         "likes",
         "comments",
         "shares",
-        "engagement_total",
-        "engagement_rate",
         "source_bucket",
         "source_key",
         "source_line_number",
-        "source_ingest_date",
-        "source_ingest_hour",
-        "source_last_modified_utc",
         "trusted_processed_at_utc",
-        "trusted_source_zone",
-        "trusted_target_zone",
     ]
 
     return valid_df.select(final_cols), rejected_df
@@ -453,7 +422,6 @@ def write_delta_from_rows(delta_uri: str, df: DataFrame) -> int:
     rows = [row.asDict(recursive=True) for row in df.collect()]
     schema = pa.schema(
         [
-            pa.field("trend_event_key", pa.string()),
             pa.field("post_id", pa.string()),
             pa.field("event_ts", pa.string()),
             pa.field("event_ts_utc", pa.string()),
@@ -465,24 +433,16 @@ def write_delta_from_rows(delta_uri: str, df: DataFrame) -> int:
             pa.field("isrc", pa.string()),
             pa.field("caption", pa.string()),
             pa.field("hashtags", pa.list_(pa.string())),
-            pa.field("hashtag_count", pa.int32()),
             pa.field("region", pa.string()),
             pa.field("is_viral", pa.bool_()),
             pa.field("views", pa.int64()),
             pa.field("likes", pa.int64()),
             pa.field("comments", pa.int64()),
             pa.field("shares", pa.int64()),
-            pa.field("engagement_total", pa.int64()),
-            pa.field("engagement_rate", pa.float64()),
             pa.field("source_bucket", pa.string()),
             pa.field("source_key", pa.string()),
             pa.field("source_line_number", pa.int64()),
-            pa.field("source_ingest_date", pa.string()),
-            pa.field("source_ingest_hour", pa.string()),
-            pa.field("source_last_modified_utc", pa.string()),
             pa.field("trusted_processed_at_utc", pa.string()),
-            pa.field("trusted_source_zone", pa.string()),
-            pa.field("trusted_target_zone", pa.string()),
         ]
     )
     table = pa.Table.from_pylist(rows, schema=schema)
