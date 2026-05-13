@@ -11,6 +11,7 @@ from botocore.exceptions import ClientError
 from deltalake import DeltaTable, write_deltalake
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
+from pyspark.sql import types as T
 
 
 ENV_NAMES = [
@@ -396,7 +397,31 @@ def read_bronze_delta_as_spark(
 ) -> DataFrame:
     bronze_table = DeltaTable(delta_uri, storage_options=storage_options())
     pandas_df = bronze_table.to_pyarrow_table().to_pandas()
-    return spark.createDataFrame(pandas_df).repartition(partitions)
+    schema = T.StructType(
+        [
+            T.StructField("rb_track_id", T.StringType(), True),
+            T.StructField("rb_href", T.StringType(), True),
+            T.StructField("rb_name", T.StringType(), True),
+            T.StructField("rb_artist", T.StringType(), True),
+            T.StructField("rb_isrc", T.StringType(), True),
+            T.StructField("rb_danceability", T.DoubleType(), True),
+            T.StructField("rb_energy", T.DoubleType(), True),
+            T.StructField("rb_valence", T.DoubleType(), True),
+            T.StructField("rb_tempo", T.DoubleType(), True),
+            T.StructField("rb_acousticness", T.DoubleType(), True),
+            T.StructField("rb_instrumentalness", T.DoubleType(), True),
+            T.StructField("rb_liveness", T.DoubleType(), True),
+            T.StructField("rb_loudness", T.DoubleType(), True),
+            T.StructField("rb_speechiness", T.DoubleType(), True),
+            T.StructField("rb_mode", T.StringType(), True),
+            T.StructField("rb_key", T.StringType(), True),
+            T.StructField("rb_time_signature", T.DoubleType(), True),
+            T.StructField("rb_duration_ms", T.DoubleType(), True),
+            T.StructField("run_id", T.StringType(), True),
+            T.StructField("run_date", T.StringType(), True),
+        ]
+    )
+    return spark.createDataFrame(pandas_df, schema=schema).repartition(partitions)
 
 
 def main() -> None:

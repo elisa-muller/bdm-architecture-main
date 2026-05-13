@@ -1,0 +1,2 @@
+reccobeats_track_id,href,track_name,track_name_norm,artist_name,artist_name_norm,isrc,danceability,energy,valence,tempo,acousticness,instrumentalness,liveness,loudness,speechiness,mode,musical_key,time_signature,duration_ms,run_id,trusted_processed_at_utc
+1e3a72d3-1395-4ab6-9f0e-eccd85742003,https://open.spotify.com/track/3e9HZxeyfWwjeyPAMmWSSQ,,,,,USUM71819361,0.72,0.654,0.411,106.976,0.227,0.0,0.101,-5.634,0.0647,1,1,,,20260511T160941Z,2026-05-13T15:55:37.435348+00:00

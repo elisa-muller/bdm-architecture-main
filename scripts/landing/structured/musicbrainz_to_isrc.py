@@ -55,8 +55,7 @@ MUSICBRAINZ_HEADERS = {
 MB_SLEEP = float(os.getenv("MB_SLEEP", "1.5"))
 #MAX_RETRIES_503 = int(os.getenv("MAX_RETRIES_503", "3"))
 CHECKPOINT_EVERY = int(os.getenv("CHECKPOINT_EVERY", "20"))
-#MAX_MBIDS_PER_RUN = int(os.getenv("MAX_MBIDS_PER_RUN", "100"))
-MAX_MBIDS_PER_RUN=5
+MAX_MBIDS_PER_RUN = int(os.getenv("MAX_MBIDS_PER_RUN", "50"))
 MAX_RETRIES_503=0
 
 SEARCH_LIMIT = int(os.getenv("SEARCH_LIMIT", "5"))
@@ -412,9 +411,11 @@ def main():
         ~df_tracks["lastfm_track_mbid"].isin(resolved_mbids)
     ].copy().reset_index(drop=True)
 
-    df_to_process = df_to_process.head(MAX_MBIDS_PER_RUN).copy()
-
-    print(f"[MusicBrainz] MBIDs to process this run limited to: {len(df_to_process)}")
+    if MAX_MBIDS_PER_RUN > 0:
+        df_to_process = df_to_process.head(MAX_MBIDS_PER_RUN).copy()
+        print(f"[MusicBrainz] MBIDs to process this run limited to: {len(df_to_process)}")
+    else:
+        print(f"[MusicBrainz] MBIDs to process this run: {len(df_to_process)}")
 
     stats = {
         "ok": 0,

@@ -296,7 +296,7 @@ def write_delta_from_dicts(delta_uri: str, rows: list[dict]) -> int:
     write_deltalake(
         delta_uri,
         table,
-        mode="overwrite",
+        mode="append",
         partition_by=["run_date"],
         storage_options=storage_options(),
     )
