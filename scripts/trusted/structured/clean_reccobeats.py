@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 
 import boto3
+import pandas as pd
 import pyarrow as pa
 from botocore.exceptions import ClientError
 from deltalake import DeltaTable, write_deltalake
@@ -140,10 +143,188 @@ def add_quality_error(errors: list[F.Column], condition: F.Column, label: str) -
     errors.append(F.when(condition, F.lit(label)))
 
 
-def validate_schema(df: DataFrame) -> None:
+def validate_schema(df: DataFrame | pd.DataFrame) -> None:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
         raise ValueError(f"Missing required ReccoBeats columns: {sorted(missing)}")
+
+
+def clean_string_series(series: pd.Series) -> pd.Series:
+    cleaned = series.astype("string").str.strip()
+    cleaned = cleaned.mask(cleaned == "")
+    cleaned = cleaned.mask(cleaned.str.lower().isin(["nan", "none", "null"]))
+    return cleaned.astype(object).where(cleaned.notna(), None)
+
+
+def normalize_name_value(value: object) -> object:
+    if value is None or pd.isna(value):
+        return None
+
+    raw = str(value).strip()
+    decomposed = unicodedata.normalize("NFKD", raw)
+    ascii_name = "".join(char for char in decomposed if not unicodedata.combining(char))
+    normalized = ascii_name.lower()
+    normalized = re.sub(r"[^a-z0-9\s]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or raw
+
+
+def add_quality_error_pandas(errors: list[str], condition: bool, label: str) -> None:
+    if condition:
+        errors.append(label)
+
+
+def clean_reccobeats_pandas(raw_df: pd.DataFrame, processed_at: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = raw_df.copy()
+
+    for col_name in [
+        "rb_track_id", "rb_href", "rb_name", "rb_artist",
+        "rb_isrc", "run_id", "run_date",
+    ]:
+        df[col_name] = clean_string_series(df[col_name])
+
+    df = df.rename(
+        columns={
+            "rb_track_id": "reccobeats_track_id",
+            "rb_href": "href",
+            "rb_name": "track_name",
+            "rb_artist": "artist_name",
+            "rb_isrc": "isrc",
+            "rb_key": "musical_key",
+        }
+    )
+
+    df["track_name_norm"] = df["track_name"].map(normalize_name_value)
+    df["artist_name_norm"] = df["artist_name"].map(normalize_name_value)
+    df["isrc"] = df["isrc"].map(lambda value: str(value).strip().upper() if value is not None else None)
+    df["isrc"] = clean_string_series(df["isrc"])
+
+    float_columns = {
+        "rb_danceability": "danceability",
+        "rb_energy": "energy",
+        "rb_valence": "valence",
+        "rb_tempo": "tempo",
+        "rb_acousticness": "acousticness",
+        "rb_instrumentalness": "instrumentalness",
+        "rb_liveness": "liveness",
+        "rb_loudness": "loudness",
+        "rb_speechiness": "speechiness",
+    }
+    for raw_col, trusted_col in float_columns.items():
+        df[trusted_col] = pd.to_numeric(df[raw_col], errors="coerce")
+
+    int_columns = {
+        "rb_mode": "mode",
+        "musical_key": "musical_key",
+        "rb_time_signature": "time_signature",
+        "rb_duration_ms": "duration_ms",
+    }
+    for raw_col, trusted_col in int_columns.items():
+        df[trusted_col] = pd.to_numeric(df[raw_col], errors="coerce")
+
+    isrc_regex = re.compile(r"^[A-Z0-9]{12}$")
+    uuid_regex = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    audio_features = [
+        "danceability", "energy", "valence", "tempo", "acousticness",
+        "instrumentalness", "liveness", "loudness", "speechiness",
+    ]
+
+    df["non_null_audio_features"] = df[audio_features].notna().sum(axis=1)
+
+    def row_errors(row: pd.Series) -> list[str]:
+        errors: list[str] = []
+
+        add_quality_error_pandas(errors, row["isrc"] is None, "missing_isrc")
+        add_quality_error_pandas(
+            errors,
+            row["isrc"] is not None and not isrc_regex.match(str(row["isrc"])),
+            "invalid_isrc_format",
+        )
+        add_quality_error_pandas(errors, row["reccobeats_track_id"] is None, "missing_reccobeats_track_id")
+        add_quality_error_pandas(
+            errors,
+            row["reccobeats_track_id"] is not None and not uuid_regex.match(str(row["reccobeats_track_id"])),
+            "invalid_reccobeats_track_id",
+        )
+        add_quality_error_pandas(errors, row["run_id"] is None, "missing_run_id")
+        add_quality_error_pandas(errors, row["run_date"] is None, "missing_run_date")
+
+        for feature in [
+            "danceability", "energy", "valence", "acousticness",
+            "instrumentalness", "liveness", "speechiness",
+        ]:
+            value = row[feature]
+            add_quality_error_pandas(
+                errors,
+                pd.notna(value) and (value < 0 or value > 1),
+                f"invalid_{feature}",
+            )
+
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["tempo"]) and (row["tempo"] <= 0 or row["tempo"] > 300),
+            "invalid_tempo",
+        )
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["loudness"]) and (row["loudness"] < -60 or row["loudness"] > 5),
+            "invalid_loudness",
+        )
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["duration_ms"]) and row["duration_ms"] <= 0,
+            "invalid_duration_ms",
+        )
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["musical_key"]) and (row["musical_key"] < 0 or row["musical_key"] > 11),
+            "invalid_musical_key",
+        )
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["mode"]) and row["mode"] not in [0, 1],
+            "invalid_mode",
+        )
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["time_signature"]) and (row["time_signature"] < 1 or row["time_signature"] > 12),
+            "invalid_time_signature",
+        )
+        add_quality_error_pandas(
+            errors,
+            row["non_null_audio_features"] == 0,
+            "missing_all_audio_features",
+        )
+
+        return errors
+
+    df["quality_errors"] = df.apply(row_errors, axis=1)
+    df["is_valid_record"] = df["quality_errors"].map(len).eq(0)
+
+    rejected_df = df.loc[~df["is_valid_record"], [
+        "reccobeats_track_id",
+        "isrc",
+        "track_name",
+        "artist_name",
+        "run_id",
+        "run_date",
+        "quality_errors",
+    ]].copy()
+
+    valid_df = df.loc[df["is_valid_record"]].copy()
+    valid_df = valid_df.sort_values(
+        by=["isrc", "non_null_audio_features", "run_date", "run_id"],
+        ascending=[True, False, False, False],
+        na_position="last",
+    )
+    valid_df = valid_df.drop_duplicates(subset=["isrc"], keep="first")
+    valid_df = valid_df.drop(columns=["non_null_audio_features"], errors="ignore")
+    valid_df["trusted_processed_at_utc"] = processed_at
+
+    for col_name in ["mode", "musical_key", "time_signature", "duration_ms"]:
+        valid_df[col_name] = valid_df[col_name].where(valid_df[col_name].isna(), valid_df[col_name].astype("Int64"))
+
+    return valid_df[FINAL_COLS].copy(), rejected_df
 
 
 def clean_reccobeats(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataFrame]:
@@ -354,16 +535,33 @@ def reccobeats_schema() -> pa.Schema:
 
 def write_delta_from_dicts(delta_uri: str, rows: list[dict]) -> int:
     table = pa.Table.from_pylist(rows, schema=reccobeats_schema())
+    partition_by: list[str] | None = ["run_date"]
+
+    try:
+        existing_table = DeltaTable(delta_uri, storage_options=storage_options())
+        existing_partitions = existing_table.metadata().partition_columns
+        partition_by = existing_partitions if existing_partitions else None
+    except Exception:
+        partition_by = ["run_date"]
 
     write_deltalake(
         delta_uri,
         table,
         mode="overwrite",
-        partition_by=["run_date"],
+        partition_by=partition_by,
         storage_options=storage_options(),
     )
 
     return len(rows)
+
+
+def read_bronze_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
+    return DeltaTable(delta_uri, storage_options=storage_options()).to_pandas()
+
+
+def dataframe_to_records(df: pd.DataFrame) -> list[dict]:
+    cleaned = df.astype(object).where(pd.notna(df), None)
+    return cleaned.to_dict(orient="records")
 
 
 def build_spark(processed_at: str, run_id: str) -> SparkSession:
@@ -449,9 +647,9 @@ def main() -> None:
     os.environ["TRUSTED_RECCOBEATS_RUN_ID"] = run_id
     os.environ["TRUSTED_RECCOBEATS_PROCESSED_AT"] = processed_at
 
-    print("[Trusted][ReccoBeats][Spark] Starting audio feature cleaning...")
-    print(f"[Trusted][ReccoBeats][Spark] Source: {bronze_delta_uri}")
-    print(f"[Trusted][ReccoBeats][Spark] Target: {trusted_delta_uri}")
+    print("[Trusted][ReccoBeats] Starting audio feature cleaning...")
+    print(f"[Trusted][ReccoBeats] Source: {bronze_delta_uri}")
+    print(f"[Trusted][ReccoBeats] Target: {trusted_delta_uri}")
 
     s3 = build_s3_client()
     ensure_bucket_exists(s3, trusted_bucket)
@@ -461,41 +659,26 @@ def main() -> None:
     duplicates_removed = 0
     rows_written = 0
 
-    spark = build_spark(processed_at, run_id)
-    spark.sparkContext.setLogLevel("WARN")
+    raw_df = read_bronze_delta_as_pandas(bronze_delta_uri)
+    validate_schema(raw_df)
 
-    try:
-        raw_df = read_bronze_delta_as_spark(
-            spark=spark,
-            delta_uri=bronze_delta_uri,
-            partitions=partitions,
-        )
+    raw_count = len(raw_df)
 
-        validate_schema(raw_df)
+    valid_df, rejected_df = clean_reccobeats_pandas(raw_df, processed_at)
 
-        raw_count = raw_df.count()
+    valid_rows = dataframe_to_records(valid_df)
+    rejected_rows = dataframe_to_records(rejected_df)
 
-        valid_df, rejected_df = clean_reccobeats(raw_df, processed_at)
+    rejected_count = len(rejected_rows)
+    duplicates_removed = max(0, raw_count - rejected_count - len(valid_rows))
 
-        valid_rows = [row.asDict(recursive=True) for row in valid_df.collect()]
-        rejected_rows = [row.asDict(recursive=True) for row in rejected_df.collect()]
-
-        rejected_count = len(rejected_rows)
-        duplicates_removed = max(0, raw_count - rejected_count - len(valid_rows))
-
-        write_rejected_rows(rejected_rows)
-        rows_written = write_delta_from_dicts(trusted_delta_uri, valid_rows)
-
-    finally:
-        try:
-            spark.stop()
-        except Exception as e:
-            print(f"[Trusted][ReccoBeats][Spark] Warning: Spark stop failed: {e}")
+    write_rejected_rows(rejected_rows)
+    rows_written = write_delta_from_dicts(trusted_delta_uri, valid_rows)
 
     report = {
         "run_id": run_id,
         "processed_at_utc": processed_at,
-        "engine": "apache_spark_python_deltalake",
+        "engine": "pandas_deltalake",
         "source": bronze_delta_uri,
         "target": trusted_delta_uri,
         "raw_records": raw_count,
@@ -507,16 +690,16 @@ def main() -> None:
         "final_columns": FINAL_COLS,
     }
 
-    report_key = f"{metadata_prefix.rstrip('/')}/clean_reccobeats_audio_features_spark_run_{run_id}.json"
+    report_key = f"{metadata_prefix.rstrip('/')}/clean_reccobeats_audio_features_run_{run_id}.json"
     write_json(s3, trusted_bucket, report_key, report)
 
     print(
-        "[Trusted][ReccoBeats][Spark] "
+        "[Trusted][ReccoBeats] "
         f"raw={raw_count}, written={rows_written}, rejected={rejected_count}, "
         f"duplicates_removed={duplicates_removed}"
     )
-    print(f"[Trusted][ReccoBeats][Spark] Report: s3://{trusted_bucket}/{report_key}")
-    print("[Trusted][ReccoBeats][Spark] Done.")
+    print(f"[Trusted][ReccoBeats] Report: s3://{trusted_bucket}/{report_key}")
+    print("[Trusted][ReccoBeats] Done.")
 
 
 if __name__ == "__main__":

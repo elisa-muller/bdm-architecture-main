@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 
 import boto3
+import pandas as pd
 import pyarrow as pa
 from botocore.exceptions import ClientError
 from deltalake import DeltaTable, write_deltalake
@@ -144,6 +147,156 @@ def validate_schema(df: DataFrame) -> None:
         raise ValueError(f"Missing required MusicBrainz columns: {sorted(missing)}")
 
 
+def clean_string_series(series: pd.Series) -> pd.Series:
+    cleaned = series.astype("string").str.strip()
+    cleaned = cleaned.mask(cleaned == "")
+    cleaned = cleaned.mask(cleaned.str.lower().isin(["nan", "none", "null"]))
+    return cleaned.astype(object).where(cleaned.notna(), None)
+
+
+def normalize_name_value(value: object) -> object:
+    if value is None or pd.isna(value):
+        return None
+
+    raw = str(value).strip()
+    decomposed = unicodedata.normalize("NFKD", raw)
+    ascii_name = "".join(char for char in decomposed if not unicodedata.combining(char))
+    normalized = ascii_name.lower()
+    normalized = re.sub(r"[^a-z0-9\s]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or raw
+
+
+def add_quality_error_pandas(errors: list[str], condition: bool, label: str) -> None:
+    if condition:
+        errors.append(label)
+
+
+def clean_musicbrainz_pandas(raw_df: pd.DataFrame, processed_at: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = raw_df.copy()
+
+    for col_name in [
+        "lastfm_track_mbid",
+        "lastfm_artist_name",
+        "lastfm_track_name",
+        "resolution_method",
+        "matched_recording_mbid",
+        "resolved_mbid",
+        "isrc",
+        "mb_status",
+        "resolved_at_utc",
+        "run_id",
+        "run_date",
+    ]:
+        df[col_name] = clean_string_series(df[col_name])
+
+    df = df.rename(
+        columns={
+            "lastfm_track_mbid": "track_mbid",
+            "lastfm_artist_name": "artist_name",
+            "lastfm_track_name": "track_name",
+            "mb_status": "resolution_status",
+        }
+    )
+
+    df["artist_name_norm"] = df["artist_name"].map(normalize_name_value)
+    df["track_name_norm"] = df["track_name"].map(normalize_name_value)
+    df["search_score"] = pd.to_numeric(df["search_score"], errors="coerce")
+    df["isrc"] = df["isrc"].map(lambda value: str(value).strip().upper() if value is not None else None)
+    df["isrc"] = clean_string_series(df["isrc"])
+
+    uuid_regex = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    isrc_regex = re.compile(r"^[A-Z0-9]{12}$")
+    expected_status_by_method = {
+        "mbid": "ok",
+        "search": "search_ok",
+        "mbid_no_isrc": "no_isrc",
+        "mbid_then_search_no_isrc": "search_no_isrc",
+        "mbid_then_search_no_match": "search_no_match",
+        "mbid_then_search_request_exception": "search_request_exception",
+    }
+
+    def row_errors(row: pd.Series) -> list[str]:
+        errors: list[str] = []
+
+        add_quality_error_pandas(errors, row["track_mbid"] is None, "missing_track_mbid")
+        add_quality_error_pandas(errors, row["track_name"] is None, "missing_track_name")
+        add_quality_error_pandas(errors, row["artist_name"] is None, "missing_artist_name")
+        add_quality_error_pandas(errors, row["resolution_method"] is None, "missing_resolution_method")
+        add_quality_error_pandas(errors, row["resolution_status"] is None, "missing_resolution_status")
+        add_quality_error_pandas(errors, row["run_id"] is None, "missing_run_id")
+        add_quality_error_pandas(errors, row["run_date"] is None, "missing_run_date")
+        add_quality_error_pandas(errors, row["resolved_at_utc"] is None, "missing_resolved_at")
+
+        add_quality_error_pandas(
+            errors,
+            row["track_mbid"] is not None and not uuid_regex.match(str(row["track_mbid"])),
+            "invalid_track_mbid",
+        )
+        add_quality_error_pandas(
+            errors,
+            row["matched_recording_mbid"] is not None
+            and not uuid_regex.match(str(row["matched_recording_mbid"])),
+            "invalid_matched_recording_mbid",
+        )
+        add_quality_error_pandas(
+            errors,
+            row["resolved_mbid"] is not None and not uuid_regex.match(str(row["resolved_mbid"])),
+            "invalid_resolved_mbid",
+        )
+        add_quality_error_pandas(
+            errors,
+            row["isrc"] is not None and not isrc_regex.match(str(row["isrc"])),
+            "invalid_isrc_format",
+        )
+        add_quality_error_pandas(
+            errors,
+            pd.notna(row["search_score"]) and (row["search_score"] < 0 or row["search_score"] > 100),
+            "invalid_search_score",
+        )
+
+        expected_status = expected_status_by_method.get(row["resolution_method"])
+        add_quality_error_pandas(
+            errors,
+            expected_status is not None and row["resolution_status"] != expected_status,
+            "inconsistent_resolution_status",
+        )
+
+        return errors
+
+    df["quality_errors"] = df.apply(row_errors, axis=1)
+    df["is_valid_record"] = df["quality_errors"].map(len).eq(0)
+
+    rejected_df = df.loc[~df["is_valid_record"], [
+        "track_mbid",
+        "track_name",
+        "artist_name",
+        "resolution_method",
+        "resolution_status",
+        "matched_recording_mbid",
+        "resolved_mbid",
+        "search_score",
+        "isrc",
+        "run_id",
+        "run_date",
+        "quality_errors",
+    ]].copy()
+
+    valid_df = df.loc[df["is_valid_record"]].copy()
+    valid_df["_has_isrc_rank"] = valid_df["isrc"].notna().map({True: 0, False: 1})
+    valid_df["_status_rank"] = valid_df["resolution_status"].isin(["ok", "search_ok"]).map({True: 0, False: 1})
+    valid_df["_search_score_sort"] = valid_df["search_score"].fillna(float("-inf"))
+    valid_df = valid_df.sort_values(
+        by=["track_mbid", "_has_isrc_rank", "_status_rank", "_search_score_sort", "resolved_at_utc", "run_id"],
+        ascending=[True, True, True, False, True, True],
+        na_position="last",
+    )
+    valid_df = valid_df.drop_duplicates(subset=["track_mbid"], keep="first")
+    valid_df["trusted_processed_at_utc"] = processed_at
+
+    return valid_df[FINAL_COLS].copy(), rejected_df
+
+
 def clean_musicbrainz(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataFrame]:
     df = raw_df
 
@@ -170,6 +323,10 @@ def clean_musicbrainz(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, 
         .withColumn("artist_name_norm", normalize_name("artist_name"))
         .withColumn("track_name_norm", normalize_name("track_name"))
         .withColumn("search_score", F.expr("try_cast(search_score as DOUBLE)"))
+        .withColumn(
+            "search_score",
+            F.when(F.isnan(F.col("search_score")), F.lit(None)).otherwise(F.col("search_score")),
+        )
         .withColumn("isrc", F.upper(F.trim(F.col("isrc"))))
     )
 
@@ -181,6 +338,11 @@ def clean_musicbrainz(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, 
         .when(F.col("resolution_method") == "search", F.lit("search_ok"))
         .when(F.col("resolution_method") == "mbid_no_isrc", F.lit("no_isrc"))
         .when(F.col("resolution_method") == "mbid_then_search_no_isrc", F.lit("search_no_isrc"))
+        .when(F.col("resolution_method") == "mbid_then_search_no_match", F.lit("search_no_match"))
+        .when(
+            F.col("resolution_method") == "mbid_then_search_request_exception",
+            F.lit("search_request_exception"),
+        )
         .otherwise(F.lit(None))
     )
 
@@ -337,16 +499,33 @@ def musicbrainz_schema() -> pa.Schema:
 
 def write_delta_from_dicts(delta_uri: str, rows: list[dict]) -> int:
     table = pa.Table.from_pylist(rows, schema=musicbrainz_schema())
+    partition_by: list[str] | None = ["run_date"]
+
+    try:
+        existing_table = DeltaTable(delta_uri, storage_options=storage_options())
+        existing_partitions = existing_table.metadata().partition_columns
+        partition_by = existing_partitions if existing_partitions else None
+    except Exception:
+        partition_by = ["run_date"]
 
     write_deltalake(
         delta_uri,
         table,
         mode="overwrite",
-        partition_by=["run_date"],
+        partition_by=partition_by,
         storage_options=storage_options(),
     )
 
     return len(rows)
+
+
+def read_bronze_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
+    return DeltaTable(delta_uri, storage_options=storage_options()).to_pandas()
+
+
+def dataframe_to_records(df: pd.DataFrame) -> list[dict]:
+    cleaned = df.astype(object).where(pd.notna(df), None)
+    return cleaned.to_dict(orient="records")
 
 
 def build_spark(processed_at: str, run_id: str) -> SparkSession:
@@ -408,9 +587,9 @@ def main() -> None:
     os.environ["TRUSTED_MUSICBRAINZ_RUN_ID"] = run_id
     os.environ["TRUSTED_MUSICBRAINZ_PROCESSED_AT"] = processed_at
 
-    print("[Trusted][MusicBrainz][Spark] Starting ISRC cleaning...")
-    print(f"[Trusted][MusicBrainz][Spark] Source: {bronze_delta_uri}")
-    print(f"[Trusted][MusicBrainz][Spark] Target: {trusted_delta_uri}")
+    print("[Trusted][MusicBrainz] Starting ISRC cleaning...")
+    print(f"[Trusted][MusicBrainz] Source: {bronze_delta_uri}")
+    print(f"[Trusted][MusicBrainz] Target: {trusted_delta_uri}")
 
     s3 = build_s3_client()
     ensure_bucket_exists(s3, trusted_bucket)
@@ -420,41 +599,26 @@ def main() -> None:
     duplicates_removed = 0
     rows_written = 0
 
-    spark = build_spark(processed_at, run_id)
-    spark.sparkContext.setLogLevel("WARN")
+    raw_df = read_bronze_delta_as_pandas(bronze_delta_uri)
+    validate_schema(raw_df)
 
-    try:
-        raw_df = read_bronze_delta_as_spark(
-            spark=spark,
-            delta_uri=bronze_delta_uri,
-            partitions=partitions,
-        )
+    raw_count = len(raw_df)
 
-        validate_schema(raw_df)
+    valid_df, rejected_df = clean_musicbrainz_pandas(raw_df, processed_at)
 
-        raw_count = raw_df.count()
+    valid_rows = dataframe_to_records(valid_df)
+    rejected_rows = dataframe_to_records(rejected_df)
 
-        valid_df, rejected_df = clean_musicbrainz(raw_df, processed_at)
+    rejected_count = len(rejected_rows)
+    duplicates_removed = max(0, raw_count - rejected_count - len(valid_rows))
 
-        valid_rows = [row.asDict(recursive=True) for row in valid_df.collect()]
-        rejected_rows = [row.asDict(recursive=True) for row in rejected_df.collect()]
-
-        rejected_count = len(rejected_rows)
-        duplicates_removed = max(0, raw_count - rejected_count - len(valid_rows))
-
-        write_rejected_rows(rejected_rows)
-        rows_written = write_delta_from_dicts(trusted_delta_uri, valid_rows)
-
-    finally:
-        try:
-            spark.stop()
-        except Exception as e:
-            print(f"[Trusted][MusicBrainz][Spark] Warning: Spark stop failed: {e}")
+    write_rejected_rows(rejected_rows)
+    rows_written = write_delta_from_dicts(trusted_delta_uri, valid_rows)
 
     report = {
         "run_id": run_id,
         "processed_at_utc": processed_at,
-        "engine": "apache_spark_python_deltalake",
+        "engine": "pandas_deltalake",
         "source": bronze_delta_uri,
         "target": trusted_delta_uri,
         "raw_records": raw_count,
@@ -466,16 +630,16 @@ def main() -> None:
         "final_columns": FINAL_COLS,
     }
 
-    report_key = f"{metadata_prefix.rstrip('/')}/clean_musicbrainz_isrc_spark_run_{run_id}.json"
+    report_key = f"{metadata_prefix.rstrip('/')}/clean_musicbrainz_isrc_run_{run_id}.json"
     write_json(s3, trusted_bucket, report_key, report)
 
     print(
-        "[Trusted][MusicBrainz][Spark] "
+        "[Trusted][MusicBrainz] "
         f"raw={raw_count}, written={rows_written}, rejected={rejected_count}, "
         f"duplicates_removed={duplicates_removed}"
     )
-    print(f"[Trusted][MusicBrainz][Spark] Report: s3://{trusted_bucket}/{report_key}")
-    print("[Trusted][MusicBrainz][Spark] Done.")
+    print(f"[Trusted][MusicBrainz] Report: s3://{trusted_bucket}/{report_key}")
+    print("[Trusted][MusicBrainz] Done.")
 
 
 if __name__ == "__main__":

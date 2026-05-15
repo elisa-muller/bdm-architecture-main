@@ -10,7 +10,7 @@ import requests
 from dotenv import load_dotenv
 from minio import Minio
 from minio.error import S3Error
-from deltalake import write_deltalake
+from deltalake import DeltaTable, write_deltalake
 
 load_dotenv()
 
@@ -43,8 +43,7 @@ DELTA_STORAGE_OPTIONS = {
 # Persistent landing path
 DELTA_URI = f"s3://{MINIO_BUCKET}/persistent/structured/lastfm/delta/tracks_delta"
 
-# For testing, use overwrite to replace the previous wrongly preprocessed table.
-# Later, change to "append" if you want to keep all runs.
+# Cumulative track inventory used by downstream structured enrichment.
 DELTA_WRITE_MODE = os.getenv("LASTFM_DELTA_WRITE_MODE", "overwrite")
 
 
@@ -63,9 +62,9 @@ countries = [
 ]
 
 per_page_limit = 50
-chart_pages = 1
-tag_pages = 1
-geo_pages = 1
+chart_pages = 2
+tag_pages = 2
+geo_pages = 2
 sleep_seconds = 0.25
 
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -218,17 +217,74 @@ def upload_csv_to_minio(df: pd.DataFrame, bucket_name: str, object_name: str) ->
     print(f"[Last.fm] Uploaded raw CSV to s3://{bucket_name}/{object_name}")
 
 
+def delta_table_exists(delta_uri: str) -> bool:
+    try:
+        DeltaTable(delta_uri, storage_options=DELTA_STORAGE_OPTIONS)
+        return True
+    except Exception:
+        return False
+
+
+def load_delta_as_df(delta_uri: str) -> pd.DataFrame:
+    dt = DeltaTable(delta_uri, storage_options=DELTA_STORAGE_OPTIONS)
+    return dt.to_pandas()
+
+
+def normalize_identity_part(series: pd.Series) -> pd.Series:
+    return (
+        series.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(r"\s+", " ", regex=True)
+    )
+
+
+def deduplicate_track_inventory(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    track_mbid = normalize_identity_part(df.get("lastfm_track_mbid", pd.Series(index=df.index)))
+    artist_name = normalize_identity_part(df.get("lastfm_artist_name", pd.Series(index=df.index)))
+    track_name = normalize_identity_part(df.get("lastfm_track_name", pd.Series(index=df.index)))
+    url = normalize_identity_part(df.get("lastfm_url", pd.Series(index=df.index)))
+
+    name_key = artist_name + "::" + track_name
+    df["_track_identity_key"] = "name::" + name_key
+    df.loc[url != "", "_track_identity_key"] = "url::" + url[url != ""]
+    df.loc[track_mbid != "", "_track_identity_key"] = "mbid::" + track_mbid[track_mbid != ""]
+
+    df = df[df["_track_identity_key"] != "name::::"].copy()
+    df = df.sort_values(["ingested_at_utc", "run_id"], na_position="last")
+    df = df.drop_duplicates(subset=["_track_identity_key"], keep="first")
+
+    return df.drop(columns=["_track_identity_key"]).reset_index(drop=True)
+
+
 def write_raw_delta_to_minio(df_raw: pd.DataFrame, delta_uri: str) -> None:
+    if delta_table_exists(delta_uri):
+        df_existing = load_delta_as_df(delta_uri)
+        df_to_write = pd.concat([df_existing, df_raw], ignore_index=True)
+        print(f"[Last.fm] Existing Delta rows before dedup: {len(df_existing)}")
+    else:
+        df_to_write = df_raw.copy()
+        print("[Last.fm] Delta table does not exist yet. It will be created.")
+
+    rows_before_dedup = len(df_to_write)
+    df_to_write = deduplicate_track_inventory(df_to_write)
+    rows_after_dedup = len(df_to_write)
+
     write_deltalake(
         delta_uri,
-        df_raw,
+        df_to_write,
         mode=DELTA_WRITE_MODE,
         storage_options=DELTA_STORAGE_OPTIONS,
         schema_mode="overwrite" if DELTA_WRITE_MODE == "overwrite" else None,
     )
 
-    print(f"[Last.fm] Uploaded raw Delta table to {delta_uri}")
+    print(f"[Last.fm] Uploaded cumulative Delta table to {delta_uri}")
     print(f"[Last.fm] Delta write mode: {DELTA_WRITE_MODE}")
+    print(f"[Last.fm] Delta rows before dedup: {rows_before_dedup}")
+    print(f"[Last.fm] Delta rows after dedup: {rows_after_dedup}")
 
 
 # -----------------------------
