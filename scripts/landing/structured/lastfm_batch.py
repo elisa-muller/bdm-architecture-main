@@ -62,9 +62,9 @@ countries = [
 ]
 
 per_page_limit = 50
-chart_pages = 2
-tag_pages = 2
-geo_pages = 2
+chart_pages = 10
+tag_pages = 10
+geo_pages = 10
 sleep_seconds = 0.25
 
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

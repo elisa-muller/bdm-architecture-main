@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 
 import boto3
+import pandas as pd
 import pyarrow as pa
 from botocore.exceptions import ClientError
 from deltalake import DeltaTable, write_deltalake
@@ -136,6 +139,128 @@ def validate_schema(df: DataFrame) -> None:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
         raise ValueError(f"Missing required bronze columns: {sorted(missing)}")
+
+
+def validate_pandas_schema(df: pd.DataFrame) -> None:
+    missing = REQUIRED_COLUMNS - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required bronze columns: {sorted(missing)}")
+
+
+def clean_string_series(series: pd.Series) -> pd.Series:
+    cleaned = series.astype("string").str.strip()
+    cleaned = cleaned.mask(cleaned == "")
+    cleaned = cleaned.mask(cleaned.str.lower().isin(["nan", "none", "null"]))
+    return cleaned.astype(object).where(cleaned.notna(), None)
+
+
+def normalize_name_value(value: object) -> object:
+    if value is None or pd.isna(value):
+        return None
+
+    raw = str(value).strip()
+    has_non_roman_script = re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", raw)
+    if has_non_roman_script:
+        return raw
+
+    decomposed = unicodedata.normalize("NFKD", raw)
+    ascii_name = "".join(char for char in decomposed if not unicodedata.combining(char))
+    normalized = ascii_name.lower()
+    normalized = re.sub(r"[^a-z0-9\s]", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized or raw
+
+
+def trusted_track_key(row: pd.Series) -> object:
+    if row["track_mbid"] is not None:
+        return f"mbid::{row['track_mbid']}"
+    if row["artist_name_norm"] is not None and row["track_name_norm"] is not None:
+        return f"name_norm::{row['artist_name_norm']}::{row['track_name_norm']}"
+    if row["artist_name"] is not None and row["track_name"] is not None:
+        return f"name_raw::{str(row['artist_name']).strip().lower()}::{str(row['track_name']).strip().lower()}"
+    return None
+
+
+def clean_tracks_pandas(raw_df: pd.DataFrame, processed_at: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = raw_df.copy()
+
+    for col_name in [
+        "run_id", "run_date", "ingested_at_utc", "source_type", "source_value",
+        "lastfm_track_name", "lastfm_track_mbid", "lastfm_artist_name",
+        "lastfm_artist_mbid", "lastfm_url", "lastfm_image_url",
+    ]:
+        df[col_name] = clean_string_series(df[col_name])
+
+    df = df.rename(
+        columns={
+            "lastfm_track_name": "track_name",
+            "lastfm_track_mbid": "track_mbid",
+            "lastfm_artist_name": "artist_name",
+            "lastfm_artist_mbid": "artist_mbid",
+            "lastfm_url": "url",
+            "lastfm_image_url": "image_url",
+        }
+    )
+
+    df["duration_seconds"] = pd.to_numeric(df["lastfm_duration"], errors="coerce").astype("Int64")
+    df["track_name_norm"] = df["track_name"].map(normalize_name_value)
+    df["artist_name_norm"] = df["artist_name"].map(normalize_name_value)
+    df["trusted_track_key"] = df.apply(trusted_track_key, axis=1)
+
+    def row_errors(row: pd.Series) -> list[str]:
+        errors: list[str] = []
+        if row["trusted_track_key"] is None:
+            errors.append("missing_identity")
+        if row["track_name"] is None:
+            errors.append("missing_track_name")
+        if row["artist_name"] is None:
+            errors.append("missing_artist_name")
+        if row["run_id"] is None:
+            errors.append("missing_run_id")
+        if row["run_date"] is None:
+            errors.append("missing_run_date")
+        if row["ingested_at_utc"] is None:
+            errors.append("missing_ingested_at")
+        if row["source_type"] is None:
+            errors.append("missing_source_type")
+        if pd.notna(row["duration_seconds"]) and int(row["duration_seconds"]) < 0:
+            errors.append("negative_duration")
+        return errors
+
+    df["quality_errors"] = df.apply(row_errors, axis=1)
+    df["is_valid_record"] = df["quality_errors"].map(lambda errors: len(errors) == 0)
+
+    rejected_df = df.loc[~df["is_valid_record"], [
+        "run_id",
+        "run_date",
+        "track_mbid",
+        "track_name",
+        "artist_name",
+        "source_type",
+        "source_value",
+        "quality_errors",
+    ]].copy()
+
+    valid_df = df.loc[df["is_valid_record"]].copy()
+    valid_df = valid_df.sort_values(
+        by=["trusted_track_key", "ingested_at_utc", "run_id"],
+        na_position="last",
+        kind="mergesort",
+    )
+    valid_df = valid_df.drop_duplicates(subset=["trusted_track_key"], keep="first")
+    valid_df["trusted_processed_at_utc"] = processed_at
+
+    for col_name in FINAL_COLS:
+        if col_name not in valid_df.columns:
+            valid_df[col_name] = None
+
+    valid_df = valid_df[FINAL_COLS].copy()
+    valid_df["duration_seconds"] = valid_df["duration_seconds"].astype(object).where(
+        valid_df["duration_seconds"].notna(),
+        None,
+    )
+
+    return valid_df, rejected_df
 
 
 def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataFrame]:
@@ -334,6 +459,11 @@ def read_bronze_delta_as_spark(spark: SparkSession, delta_uri: str, partitions: 
     return spark.createDataFrame(pandas_df).repartition(partitions)
 
 
+def read_bronze_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
+    bronze_table = DeltaTable(delta_uri, storage_options=storage_options())
+    return bronze_table.to_pandas()
+
+
 def main() -> None:
     bronze_bucket = env("BRONZE_BUCKET", "bronze")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
@@ -368,32 +498,22 @@ def main() -> None:
     duplicates_removed = 0
     rows_written = 0
 
-    spark = build_spark(processed_at, run_id)
-    spark.sparkContext.setLogLevel("WARN")
+    raw_df = read_bronze_delta_as_pandas(bronze_delta_uri)
+    validate_pandas_schema(raw_df)
 
-    try:
-        raw_df = read_bronze_delta_as_spark(spark, bronze_delta_uri, partitions)
-        validate_schema(raw_df)
+    raw_count = len(raw_df)
 
-        raw_count = raw_df.count()
+    valid_df, rejected_df = clean_tracks_pandas(raw_df, processed_at)
 
-        valid_df, rejected_df = clean_tracks(raw_df, processed_at)
+    valid_rows = valid_df.where(pd.notna(valid_df), None).to_dict(orient="records")
+    rejected_rows = rejected_df.where(pd.notna(rejected_df), None).to_dict(orient="records")
 
-        valid_rows = [row.asDict(recursive=True) for row in valid_df.collect()]
-        rejected_rows = [row.asDict(recursive=True) for row in rejected_df.collect()]
+    valid_count = len(valid_rows)
+    rejected_count = len(rejected_rows)
+    duplicates_removed = max(0, raw_count - rejected_count - valid_count)
 
-        valid_count = len(valid_rows)
-        rejected_count = len(rejected_rows)
-        duplicates_removed = max(0, raw_count - rejected_count - valid_count)
-
-        write_rejected_rows(rejected_rows)
-        rows_written = write_delta_from_dicts(trusted_delta_uri, valid_rows)
-
-    finally:
-        try:
-            spark.stop()
-        except Exception as e:
-            print(f"[Trusted][Last.fm][Spark] Warning: Spark stop failed: {e}")
+    write_rejected_rows(rejected_rows)
+    rows_written = write_delta_from_dicts(trusted_delta_uri, valid_rows)
 
     report = {
         "run_id": run_id,

@@ -55,7 +55,7 @@ MUSICBRAINZ_HEADERS = {
 MB_SLEEP = float(os.getenv("MB_SLEEP", "1.5"))
 #MAX_RETRIES_503 = int(os.getenv("MAX_RETRIES_503", "3"))
 CHECKPOINT_EVERY = int(os.getenv("CHECKPOINT_EVERY", "20"))
-MAX_MBIDS_PER_RUN = int(os.getenv("MAX_MBIDS_PER_RUN", "400"))
+MAX_MBIDS_PER_RUN = int(os.getenv("MAX_MBIDS_PER_RUN", "1800"))
 MAX_RETRIES_503=0
 
 SEARCH_LIMIT = int(os.getenv("SEARCH_LIMIT", "5"))
