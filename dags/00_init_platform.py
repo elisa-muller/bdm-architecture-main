@@ -96,9 +96,11 @@ def init_platform():
             # Exploitation
             f"{EXPLOITATION_BUCKET}:structured/music_analytics/delta/",
             f"{EXPLOITATION_BUCKET}:semi_structured/trends_analytics/delta/",
+            f"{EXPLOITATION_BUCKET}:recommender/song_features/delta/",
             f"{EXPLOITATION_BUCKET}:unstructured/images/embeddings/",
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/",
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/image_context_events/",
+            f"{EXPLOITATION_BUCKET}:metadata/recommender/song_features/",
             f"{EXPLOITATION_BUCKET}:metadata/",
         ]
 
