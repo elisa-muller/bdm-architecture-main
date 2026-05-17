@@ -29,8 +29,7 @@ REQUIRED_COLUMNS = {
     "run_id", "run_date", "ingested_at_utc", "source_type", "source_value",
     "source_page", "lastfm_track_name", "lastfm_track_mbid",
     "lastfm_artist_name", "lastfm_artist_mbid", "lastfm_url",
-    "lastfm_duration", "lastfm_image_url", "lastfm_listeners",
-    "lastfm_playcount", "lastfm_rank",
+    "lastfm_duration", "lastfm_image_url",
 }
 
 FINAL_COLS = [
@@ -42,9 +41,6 @@ FINAL_COLS = [
     "artist_name",
     "artist_name_norm",
     "duration_seconds",
-    "listeners",
-    "playcount",
-    "chart_rank",
     "url",
     "image_url",
     "source_type",
@@ -207,9 +203,6 @@ def clean_tracks_pandas(raw_df: pd.DataFrame, processed_at: str) -> tuple[pd.Dat
     )
 
     df["duration_seconds"] = pd.to_numeric(df["lastfm_duration"], errors="coerce").astype("Int64")
-    df["listeners"] = pd.to_numeric(df["lastfm_listeners"], errors="coerce").astype("Int64")
-    df["playcount"] = pd.to_numeric(df["lastfm_playcount"], errors="coerce").astype("Int64")
-    df["chart_rank"] = pd.to_numeric(df["lastfm_rank"], errors="coerce").astype("Int64")
     df["track_name_norm"] = df["track_name"].map(normalize_name_value)
     df["artist_name_norm"] = df["artist_name"].map(normalize_name_value)
     df["trusted_track_key"] = df.apply(trusted_track_key, axis=1)
@@ -232,12 +225,6 @@ def clean_tracks_pandas(raw_df: pd.DataFrame, processed_at: str) -> tuple[pd.Dat
             errors.append("missing_source_type")
         if pd.notna(row["duration_seconds"]) and int(row["duration_seconds"]) < 0:
             errors.append("negative_duration")
-        if pd.notna(row["listeners"]) and int(row["listeners"]) < 0:
-            errors.append("negative_listeners")
-        if pd.notna(row["playcount"]) and int(row["playcount"]) < 0:
-            errors.append("negative_playcount")
-        if pd.notna(row["chart_rank"]) and int(row["chart_rank"]) <= 0:
-            errors.append("invalid_chart_rank")
         return errors
 
     df["quality_errors"] = df.apply(row_errors, axis=1)
@@ -272,11 +259,6 @@ def clean_tracks_pandas(raw_df: pd.DataFrame, processed_at: str) -> tuple[pd.Dat
         valid_df["duration_seconds"].notna(),
         None,
     )
-    for col_name in ["listeners", "playcount", "chart_rank"]:
-        valid_df[col_name] = valid_df[col_name].astype(object).where(
-            valid_df[col_name].notna(),
-            None,
-        )
 
     return valid_df, rejected_df
 
@@ -293,9 +275,6 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
 
     df = (
         df.withColumn("duration_seconds", F.expr("try_cast(lastfm_duration as BIGINT)"))
-        .withColumn("listeners", F.expr("try_cast(lastfm_listeners as BIGINT)"))
-        .withColumn("playcount", F.expr("try_cast(lastfm_playcount as BIGINT)"))
-        .withColumn("chart_rank", F.expr("try_cast(lastfm_rank as INT)"))
         .withColumnRenamed("lastfm_track_name", "track_name")
         .withColumnRenamed("lastfm_track_mbid", "track_mbid")
         .withColumnRenamed("lastfm_artist_name", "artist_name")
@@ -346,21 +325,6 @@ def clean_tracks(raw_df: DataFrame, processed_at: str) -> tuple[DataFrame, DataF
         quality_errors,
         F.col("duration_seconds").isNotNull() & (F.col("duration_seconds") < 0),
         "negative_duration",
-    )
-    add_quality_error(
-        quality_errors,
-        F.col("listeners").isNotNull() & (F.col("listeners") < 0),
-        "negative_listeners",
-    )
-    add_quality_error(
-        quality_errors,
-        F.col("playcount").isNotNull() & (F.col("playcount") < 0),
-        "negative_playcount",
-    )
-    add_quality_error(
-        quality_errors,
-        F.col("chart_rank").isNotNull() & (F.col("chart_rank") <= 0),
-        "invalid_chart_rank",
     )
 
     df = (
@@ -438,9 +402,6 @@ def track_schema() -> pa.Schema:
             pa.field("artist_name", pa.string()),
             pa.field("artist_name_norm", pa.string()),
             pa.field("duration_seconds", pa.int64()),
-            pa.field("listeners", pa.int64()),
-            pa.field("playcount", pa.int64()),
-            pa.field("chart_rank", pa.int64()),
             pa.field("url", pa.string()),
             pa.field("image_url", pa.string()),
             pa.field("source_type", pa.string()),
@@ -461,6 +422,7 @@ def write_delta_from_dicts(delta_uri: str, rows: list[dict]) -> int:
         delta_uri,
         table,
         mode="overwrite",
+        schema_mode="overwrite",
         partition_by=["run_date"],
         storage_options=storage_options(),
     )
