@@ -11,6 +11,8 @@ RUN set -ex; \
     curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py; \
     python3.12 /tmp/get-pip.py; \
     python3.12 -m pip install --no-cache-dir boto3 Pillow pymilvus==2.5.4 pyspark pyarrow deltalake; \
+    python3.12 -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch; \
+    python3.12 -m pip install --no-cache-dir transformers; \
     rm -rf /var/lib/apt/lists/* /tmp/get-pip.py
 
 ENV PYSPARK_PYTHON=/usr/bin/python3.12

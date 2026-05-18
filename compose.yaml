@@ -41,6 +41,7 @@ x-airflow-common:
     # Project topics
     TOPIC_IMAGES_RAW: 'music-images-raw'
     TOPIC_TRENDS_RAW: 'music-trends-raw'
+    TOPIC_RECOMMENDATION_REQUESTS: 'music-recommendation-requests'
 
     # Bronze landing zone
     BRONZE_BUCKET: 'bronze'
@@ -291,6 +292,63 @@ services:
       spark-worker:
         condition: service_started
       minio:
+        condition: service_started
+    restart: unless-stopped
+
+  song-recommender-stream:
+    build:
+      context: ./docker/spark
+      dockerfile: pyspark.Dockerfile
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - spark://spark-master:7077
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2
+      - --conf
+      - spark.pyspark.driver.python=/usr/bin/python3.12
+      - --conf
+      - spark.pyspark.python=/usr/bin/python3.12
+      - --conf
+      - spark.executorEnv.PYSPARK_PYTHON=/usr/bin/python3.12
+      - /opt/airflow/scripts/streaming/recommender/realtime_song_recommendations_spark.py
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      TOPIC_RECOMMENDATION_REQUESTS: music-recommendation-requests
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      EXPLOITATION_BUCKET: exploitation
+      EXPLOITATION_RECOMMENDER_FEATURES_DELTA_URI: s3://exploitation/recommender/song_features/delta/song_recommender_features_delta
+      RECOMMENDATION_EVENTS_PREFIX: consumption/recommendations/recommendation_events/
+      MILVUS_HOST: milvus-standalone
+      MILVUS_PORT: "19530"
+      MILVUS_SONG_COLLECTION: song_recommender_embeddings
+      IMAGE_EMBEDDING_MODEL: openai/clip-vit-base-patch32
+      IMAGE_EMBEDDING_DIM: "512"
+      RECOMMENDER_TOP_K: "10"
+      RECOMMENDER_STORE_IMAGE_EMBEDDING: "true"
+      REALTIME_RECOMMENDER_TRIGGER_SECONDS: "30"
+      REALTIME_RECOMMENDER_MAX_OFFSETS_PER_TRIGGER: "3"
+      REALTIME_RECOMMENDER_CHECKPOINT_PATH: /tmp/realtime-song-recommendations-checkpoint
+      HF_HOME: /tmp/huggingface
+      HOME: /tmp
+      PYSPARK_PYTHON: /usr/bin/python3.12
+      PYSPARK_DRIVER_PYTHON: /usr/bin/python3.12
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+    depends_on:
+      kafka:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+      minio:
+        condition: service_started
+      milvus-standalone:
         condition: service_started
     restart: unless-stopped
 

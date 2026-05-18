@@ -14,6 +14,10 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD"
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 TOPIC_IMAGES_RAW = os.getenv("TOPIC_IMAGES_RAW", "music-images-raw")
 TOPIC_TRENDS_RAW = os.getenv("TOPIC_TRENDS_RAW", "music-trends-raw")
+TOPIC_RECOMMENDATION_REQUESTS = os.getenv(
+    "TOPIC_RECOMMENDATION_REQUESTS",
+    "music-recommendation-requests",
+)
 
 BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
 TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
@@ -101,6 +105,7 @@ def init_platform():
             f"{EXPLOITATION_BUCKET}:unstructured/images/embeddings/",
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/",
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/image_context_events/",
+            f"{EXPLOITATION_BUCKET}:consumption/recommendations/recommendation_events/",
             f"{EXPLOITATION_BUCKET}:metadata/recommender/song_features/",
             f"{EXPLOITATION_BUCKET}:metadata/recommender/song_embeddings/",
             f"{EXPLOITATION_BUCKET}:metadata/",
@@ -143,6 +148,7 @@ def init_platform():
         topics_to_create = [
             NewTopic(name=TOPIC_IMAGES_RAW, num_partitions=1, replication_factor=1),
             NewTopic(name=TOPIC_TRENDS_RAW, num_partitions=1, replication_factor=1),
+            NewTopic(name=TOPIC_RECOMMENDATION_REQUESTS, num_partitions=1, replication_factor=1),
         ]
 
         created_or_existing = []
