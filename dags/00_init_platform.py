@@ -18,6 +18,10 @@ TOPIC_RECOMMENDATION_REQUESTS = os.getenv(
     "TOPIC_RECOMMENDATION_REQUESTS",
     "music-recommendation-requests",
 )
+TOPIC_RECOMMENDATION_FEEDBACK = os.getenv(
+    "TOPIC_RECOMMENDATION_FEEDBACK",
+    "music-recommendation-feedback",
+)
 
 BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
 TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
@@ -87,6 +91,8 @@ def init_platform():
             f"{BRONZE_BUCKET}:persistent/structured/reccobeats/delta/",
             f"{BRONZE_BUCKET}:persistent/semi_structured/trends/raw/",
             f"{BRONZE_BUCKET}:persistent/semi_structured/trends/delta/",
+            f"{BRONZE_BUCKET}:temporal/recommender/feedback/raw/",
+            f"{BRONZE_BUCKET}:persistent/recommender/feedback/raw/",
 
             # Trusted
             f"{TRUSTED_BUCKET}:structured/lastfm/delta/",
@@ -94,8 +100,11 @@ def init_platform():
             f"{TRUSTED_BUCKET}:structured/reccobeats/delta/",
             f"{TRUSTED_BUCKET}:semi_structured/trends/delta/",
             f"{TRUSTED_BUCKET}:semi_structured/trends/rejected/",
+            f"{TRUSTED_BUCKET}:recommender/feedback/delta/",
+            f"{TRUSTED_BUCKET}:recommender/feedback/rejected/",
             f"{TRUSTED_BUCKET}:unstructured/images/clean/",
             f"{TRUSTED_BUCKET}:metadata/semi_structured/trends/",
+            f"{TRUSTED_BUCKET}:metadata/recommender/feedback/",
 
             # Exploitation
             f"{EXPLOITATION_BUCKET}:structured/music_analytics/delta/",
@@ -106,8 +115,12 @@ def init_platform():
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/",
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/image_context_events/",
             f"{EXPLOITATION_BUCKET}:consumption/recommendations/recommendation_events/",
+            f"{EXPLOITATION_BUCKET}:consumption/recommendations/feedback_events_delta/",
+            f"{EXPLOITATION_BUCKET}:consumption/recommendations/feedback_summary_delta/",
+            f"{EXPLOITATION_BUCKET}:consumption/recommendations/recommendation_outcomes_delta/",
             f"{EXPLOITATION_BUCKET}:metadata/recommender/song_features/",
             f"{EXPLOITATION_BUCKET}:metadata/recommender/song_embeddings/",
+            f"{EXPLOITATION_BUCKET}:metadata/recommender/feedback/",
             f"{EXPLOITATION_BUCKET}:metadata/",
         ]
 
@@ -149,6 +162,7 @@ def init_platform():
             NewTopic(name=TOPIC_IMAGES_RAW, num_partitions=1, replication_factor=1),
             NewTopic(name=TOPIC_TRENDS_RAW, num_partitions=1, replication_factor=1),
             NewTopic(name=TOPIC_RECOMMENDATION_REQUESTS, num_partitions=1, replication_factor=1),
+            NewTopic(name=TOPIC_RECOMMENDATION_FEEDBACK, num_partitions=1, replication_factor=1),
         ]
 
         created_or_existing = []

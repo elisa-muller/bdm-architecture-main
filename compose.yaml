@@ -42,6 +42,7 @@ x-airflow-common:
     TOPIC_IMAGES_RAW: 'music-images-raw'
     TOPIC_TRENDS_RAW: 'music-trends-raw'
     TOPIC_RECOMMENDATION_REQUESTS: 'music-recommendation-requests'
+    TOPIC_RECOMMENDATION_FEEDBACK: 'music-recommendation-feedback'
 
     # Bronze landing zone
     BRONZE_BUCKET: 'bronze'
@@ -351,6 +352,35 @@ services:
       milvus-standalone:
         condition: service_started
     restart: unless-stopped
+
+  recommendation-feedback-producer:
+    profiles: ["manual"]
+    build: ./docker/airflow
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: 'kafka:9092'
+      TOPIC_RECOMMENDATION_FEEDBACK: 'music-recommendation-feedback'
+      MINIO_ENDPOINT: 'http://minio:9000'
+      MINIO_ACCESS_KEY: 'minioadmin'
+      MINIO_SECRET_KEY: 'minioadmin'
+      EXPLOITATION_BUCKET: 'exploitation'
+      RECOMMENDATION_EVENTS_PREFIX: 'consumption/recommendations/recommendation_events/'
+      MAX_FEEDBACK_EVENTS: '5'
+      RUN_FOREVER: 'false'
+      SLEEP_SECONDS: '1'
+      FEEDBACK_ACCEPT_PROBABILITY: '0.55'
+      FEEDBACK_PICK_LOWER_RANK_PROBABILITY: '0.25'
+      FEEDBACK_SKIP_PROBABILITY: '0.15'
+    volumes:
+      - ./scripts:/opt/airflow/scripts
+      - ./data_sources:/opt/airflow/data_sources
+    command: python -u /opt/airflow/scripts/landing/recommender/produce_recommendation_feedback.py
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_started
 
   airflow-apiserver:
     <<: *airflow-common
