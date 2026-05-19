@@ -42,9 +42,15 @@ COMMON_ENV = {
         "TRUSTED_RECOMMENDATION_FEEDBACK_SPARK_PARTITIONS",
         "4",
     ),
-    "SPARK_MASTER_URL": os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077"),
-    "SPARK_DRIVER_PYTHON": os.getenv("SPARK_DRIVER_PYTHON", "/home/airflow/.local/bin/python"),
-    "SPARK_EXECUTOR_PYTHON": os.getenv("SPARK_EXECUTOR_PYTHON", "/usr/bin/python3.12"),
+    "SPARK_MASTER_URL": os.getenv("RECOMMENDATION_FEEDBACK_SPARK_MASTER_URL", "local[*]"),
+    "SPARK_DRIVER_PYTHON": os.getenv(
+        "RECOMMENDATION_FEEDBACK_SPARK_DRIVER_PYTHON",
+        "/home/airflow/.local/bin/python",
+    ),
+    "SPARK_EXECUTOR_PYTHON": os.getenv(
+        "RECOMMENDATION_FEEDBACK_SPARK_EXECUTOR_PYTHON",
+        "/home/airflow/.local/bin/python",
+    ),
 }
 
 
@@ -54,6 +60,7 @@ COMMON_ENV = {
     start_date=datetime(2025, 1, 1),
     schedule="*/15 * * * *",
     catchup=False,
+    max_active_runs=1,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=2)},
     tags=["trusted", "recommendations", "feedback", "spark"],
 )
