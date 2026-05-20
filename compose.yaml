@@ -331,8 +331,8 @@ services:
       IMAGE_EMBEDDING_DIM: "512"
       RECOMMENDER_TOP_K: "10"
       RECOMMENDER_STORE_IMAGE_EMBEDDING: "true"
-      REALTIME_RECOMMENDER_TRIGGER_SECONDS: "30"
-      REALTIME_RECOMMENDER_MAX_OFFSETS_PER_TRIGGER: "3"
+      REALTIME_RECOMMENDER_TRIGGER_SECONDS: "5"
+      REALTIME_RECOMMENDER_MAX_OFFSETS_PER_TRIGGER: "30"
       REALTIME_RECOMMENDER_CHECKPOINT_PATH: /tmp/realtime-song-recommendations-checkpoint
       HF_HOME: /tmp/huggingface
       HOME: /tmp
@@ -556,6 +556,29 @@ services:
       kafka:
         condition: service_healthy
       trends-api:
+        condition: service_started
+    restart: unless-stopped
+
+  streamlit-dashboard:
+    build:
+      context: .
+      dockerfile: ./docker/dashboard/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      MINIO_ENDPOINT: 'http://minio:9000'
+      MINIO_ACCESS_KEY: 'minioadmin'
+      MINIO_SECRET_KEY: 'minioadmin'
+      EXPLOITATION_BUCKET: 'exploitation'
+      EXPLOITATION_TRENDS_AGG_DELTA_URI: 's3://exploitation/semi_structured/trends/delta/song_trend_aggregates_delta'
+      EXPLOITATION_SONG_AUDIO_FEATURES_DELTA_URI: 's3://exploitation/structured/song_audio_features/delta/song_audio_features_delta'
+      EXPLOITATION_RECOMMENDER_FEATURES_DELTA_URI: 's3://exploitation/recommender/song_features/delta/song_recommender_features_delta'
+      EXPLOITATION_RECOMMENDATION_FEEDBACK_SUMMARY_DELTA_URI: 's3://exploitation/consumption/recommendations/feedback_summary_delta'
+      EXPLOITATION_RECOMMENDATION_OUTCOMES_DELTA_URI: 's3://exploitation/consumption/recommendations/recommendation_outcomes_delta'
+    volumes:
+      - ./scripts/consumption/dashboard:/app/dashboard
+    depends_on:
+      minio:
         condition: service_started
     restart: unless-stopped
 
