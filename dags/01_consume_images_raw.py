@@ -29,7 +29,7 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("IMAGES_CONSUMER_TIMEOUT_MS", "5000"))
 
 
 @dag(
-    dag_id="consume_images_raw_to_bronze",
+    dag_id="01_raw_images",
     description="Consume image payloads from Kafka, store in temporal, migrate to persistent, record metadata.",
     start_date=datetime(2025, 1, 1),
     schedule="*/1 * * * *",

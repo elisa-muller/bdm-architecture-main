@@ -48,7 +48,7 @@ docker compose ps   # wait until all services are healthy
 After starting the services:
 
 1. Open Airflow UI  
-2. Trigger the DAG: `init_platform`
+2. Trigger the DAG: `00_init`
 
 This will:
 
@@ -68,7 +68,7 @@ This will:
 
 | Component | Value |
 |---|---|
-| DAG | `consume_images_raw_to_bronze` |
+| DAG | `01_raw_images` |
 | Schedule | every 1 minute |
 | Output | `bronze/temporal/unstructured/images/raw/` |
 
@@ -82,7 +82,7 @@ This will:
 
 | Component | Value |
 |---|---|
-| DAG | `consume_trends_raw_to_bronze` |
+| DAG | `02_raw_trends` |
 | Schedule | every 5 minutes |
 | Output | `bronze/temporal/semi_structured/trends/raw/` |
 
@@ -94,7 +94,7 @@ This will:
 
 | Property | Value |
 |---|---|
-| DAG | `structured_batch` |
+| DAG | `03_raw_music` |
 | Schedule | daily (00:00) |
 | Type | batch processing |
 
@@ -115,15 +115,29 @@ Used to:
 
 | DAG | Schedule | What it does |
 |---|---|---|
-| `init_platform` | manual | Initialize Kafka topics and MinIO bucket |
-| `consume_images_raw_to_bronze` | every 1 min | Ingest → temporal → migrate to persistent → record metadata |
-| `consume_trends_raw_to_bronze` | every 5 min | Ingest → temporal → migrate to persistent → record metadata |
-| `structured_batch` | daily | Batch ingestion + enrichment pipeline |
-| `trusted_trends_pipeline` | every 15 min | Spark cleaning of persistent semistructured trends into Trusted Delta |
+| `00_init` | manual | Initialize Kafka topics, MinIO buckets and folder structure |
+| `01_raw_images` | every 1 min | Ingest image events into Bronze |
+| `02_raw_trends` | every 5 min | Ingest social trend events into Bronze |
+| `03_raw_music` | daily/manual | Landing structured ingestion: Last.fm → MusicBrainz → ReccoBeats |
+| `04_trusted_images` | every 15 min | Clean Bronze images into Trusted |
+| `05_image_embeddings` | triggered/manual | Generate image embeddings from Trusted images |
+| `06_trusted_trends` | every 15 min | Clean Bronze trend events into Trusted |
+| `07_trend_features` | triggered/manual | Aggregate Trusted trends into song-level features |
+| `08_trusted_music` | manual | Clean structured music data into Trusted |
+| `09_song_features` | manual | Build song-level audio features |
+| `10_recommender_features` | manual | Join audio features with trend features for recommendation |
+| `11_song_index` | triggered/manual | Generate song embeddings and upsert them into Milvus |
+| `12_raw_feedback` | every 5 min | Consume recommendation feedback into Bronze |
+| `13_trusted_feedback` | triggered/manual | Clean recommendation feedback into Trusted |
+| `14_feedback_metrics` | triggered/manual | Build feedback summary and outcome tables for the dashboard |
 
 ---
 
 ## Orchestration
+
+The orchestration is defined through schedules and downstream DAG triggers, following the same style as the P1 pipeline. There is no extra master DAG. Each DAG keeps one clear responsibility, and the DAGs that produce inputs for the next layer trigger the next DAG when they finish successfully.
+
+In Airflow, unpause the scheduled DAGs if you want them to run automatically. For a shorter demo, trigger them manually in the order shown below.
 
 | Component | Behavior |
 |---|---|
@@ -131,12 +145,15 @@ Used to:
 | Kafka | Streaming buffer |
 | Airflow consumers | Scheduled batch |
 | Structured batch | Daily execution |
+| Downstream triggers | Move data from one layer to the next after successful runs |
 
 Execution flow:
 
 ```
-Streaming → Kafka → Airflow → MinIO (Bronze)
-Batch → APIs → Airflow → structured outputs
+03_raw_music → 08_trusted_music → 09_song_features → 10_recommender_features → 11_song_index
+04_trusted_images → 05_image_embeddings
+06_trusted_trends → 07_trend_features
+12_raw_feedback → 13_trusted_feedback → 14_feedback_metrics
 ```
 
 ---

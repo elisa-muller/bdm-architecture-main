@@ -55,10 +55,10 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="trusted_recommendation_feedback_pipeline",
+    dag_id="13_trusted_feedback",
     description="Clean raw recommendation feedback events into the Trusted Zone.",
     start_date=datetime(2025, 1, 1),
-    schedule="*/15 * * * *",
+    schedule=None,
     catchup=False,
     max_active_runs=1,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=2)},
@@ -79,16 +79,16 @@ def trusted_recommendation_feedback_pipeline():
         env=COMMON_ENV,
     )
 
-    trigger_exploitation_task = TriggerDagRunOperator(
-        task_id="trigger_exploitation_recommendation_feedback",
-        trigger_dag_id="exploitation_recommendation_feedback_pipeline",
+    trigger_feedback_metrics_task = TriggerDagRunOperator(
+        task_id="trigger_14_feedback_metrics",
+        trigger_dag_id="14_feedback_metrics",
         trigger_run_id="trusted_feedback__{{ run_id }}",
         conf={"source_dag_run_id": "{{ run_id }}"},
         reset_dag_run=False,
         skip_when_already_exists=True,
     )
 
-    clean_feedback_task >> trigger_exploitation_task
+    clean_feedback_task >> trigger_feedback_metrics_task
 
 
 trusted_recommendation_feedback_pipeline()

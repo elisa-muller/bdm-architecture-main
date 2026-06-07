@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -156,7 +157,34 @@ def is_real_value(value: Any) -> bool:
     return str(value).strip().lower() not in {"", "none", "nan", "[]"}
 
 
-def date_filter(df: pd.DataFrame) -> pd.DataFrame:
+def list_value(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_values = value
+    elif hasattr(value, "tolist"):
+        raw_values = value.tolist()
+    else:
+        try:
+            if pd.isna(value):
+                return []
+        except (TypeError, ValueError):
+            pass
+        raw_values = [value]
+
+    values = []
+    for item in raw_values:
+        text = str(item).strip()
+        if text and text.lower() not in {"none", "nan", "[]"}:
+            values.append(text)
+    return values
+
+
+def chart_title(title: str) -> alt.TitleParams:
+    return alt.TitleParams(text=title, anchor="middle")
+
+
+def date_filter(df: pd.DataFrame, key: str, default_latest: bool = True) -> pd.DataFrame:
     date_columns = [
         column
         for column in ["event_date", "snapshot_date", "last_event_ts_utc", "recommendation_event_ts"]
@@ -173,7 +201,14 @@ def date_filter(df: pd.DataFrame) -> pd.DataFrame:
 
     min_date = valid.min().date()
     max_date = valid.max().date()
-    selected = st.sidebar.date_input("Date range", value=(max_date, max_date), min_value=min_date, max_value=max_date)
+    default_value = (max_date, max_date) if default_latest else (min_date, max_date)
+    selected = st.sidebar.date_input(
+        "Date range",
+        value=default_value,
+        min_value=min_date,
+        max_value=max_date,
+        key=key,
+    )
     if isinstance(selected, tuple) and len(selected) == 2:
         start, end = selected
         mask = parsed.dt.date.between(start, end)
@@ -198,7 +233,7 @@ def bar_chart(
             y=alt.Y(f"{y}:Q", title=y_title),
             tooltip=tooltip or [x, y],
         )
-        .properties(title=title, height=360)
+        .properties(title=chart_title(title), height=360)
     )
 
 
@@ -220,7 +255,47 @@ def line_chart(
             color=alt.Color(f"{color}:N", title="Metric"),
             tooltip=[x, color, y],
         )
-        .properties(title=title, height=360)
+        .properties(title=chart_title(title), height=360)
+    )
+
+
+def pie_chart(df: pd.DataFrame, title: str) -> alt.Chart:
+    df = df.copy()
+    total = pd.to_numeric(df["count"], errors="coerce").fillna(0).sum()
+    df["percentage"] = 0.0 if total == 0 else df["count"] / total
+    df["legend_label"] = df.apply(
+        lambda row: f"{row['hashtag']} {row['percentage']:.0%}",
+        axis=1,
+    )
+
+    donut = (
+        alt.Chart(df)
+        .mark_arc(innerRadius=72, outerRadius=150, stroke="#ffffff", strokeWidth=2)
+        .encode(
+            theta=alt.Theta("count:Q", title="Mentions"),
+            color=alt.Color(
+                "legend_label:N",
+                title="Hashtag share",
+                scale=alt.Scale(scheme="tableau20"),
+                legend=alt.Legend(orient="right", labelLimit=260),
+            ),
+            order=alt.Order("count:Q", sort="descending"),
+            tooltip=[
+                alt.Tooltip("hashtag:N", title="Hashtag"),
+                alt.Tooltip("count:Q", title="Mentions"),
+                alt.Tooltip("percentage:Q", title="Share", format=".1%"),
+            ],
+        )
+    )
+    center_label = (
+        alt.Chart(pd.DataFrame({"label": ["Top hashtags"]}))
+        .mark_text(size=15, fontWeight="bold", color="#5f667a")
+        .encode(text="label:N")
+    )
+
+    return (
+        (donut + center_label)
+        .properties(title=chart_title(title), height=330)
     )
 
 
@@ -250,7 +325,7 @@ def trend_tab(trends: pd.DataFrame, error: str | None) -> None:
         show_empty_state("Trend Intelligence", SOURCES["trends"], error)
         return
 
-    trends = date_filter(trends)
+    trends = date_filter(trends, key="trend_date_range", default_latest=True)
     current_window = has_real_values(trends, "recent_post_count_24h")
     posts_col = "recent_post_count_24h" if current_window else "post_count"
     views_col = "views_24h" if current_window else "views_sum"
@@ -311,6 +386,24 @@ def trend_tab(trends: pd.DataFrame, error: str | None) -> None:
             table_cols.insert(2, "trend_score")
         st.dataframe(top[table_cols], width="stretch", hide_index=True)
 
+    if "top_hashtags" in top.columns:
+        hashtag_counter: Counter[str] = Counter()
+        for tags in top["top_hashtags"]:
+            hashtag_counter.update(list_value(tags))
+
+        if hashtag_counter:
+            hashtag_df = pd.DataFrame(
+                hashtag_counter.most_common(8),
+                columns=["hashtag", "count"],
+            )
+            st.altair_chart(
+                pie_chart(
+                    hashtag_df,
+                    title="Most Used Hashtags Among Top Trending Songs",
+                ),
+                width="stretch",
+            )
+
 
 def audio_tab(audio: pd.DataFrame, error: str | None) -> None:
     st.subheader("Music Feature Explorer")
@@ -342,7 +435,7 @@ def audio_tab(audio: pd.DataFrame, error: str | None) -> None:
                 color=alt.Color("danceability:Q", title="Danceability", scale=alt.Scale(scheme="blues")),
                 tooltip=[col for col in ["track_name", "artist_name", "energy", "valence", "danceability", "tempo"] if col in scatter_df],
             )
-            .properties(title="Song Energy vs Valence", height=360),
+            .properties(title=chart_title("Song Energy vs Valence"), height=360),
             width="stretch",
         )
     with right:
@@ -410,7 +503,11 @@ def recommender_tab(features: pd.DataFrame, feedback: pd.DataFrame, outcomes: pd
             st.dataframe(ranked[table_cols], width="stretch", hide_index=True)
         return
 
-    filtered_feedback = date_filter(feedback) if not feedback.empty else feedback
+    filtered_feedback = (
+        date_filter(feedback, key="recommendation_feedback_date_range", default_latest=False)
+        if not feedback.empty
+        else feedback
+    )
     metric_cols = st.columns(5)
     metric_cols[0].metric("Recommendation rows", format_number(len(outcomes)))
     metric_cols[1].metric("Feedback events", format_number(safe_sum(filtered_feedback, "feedback_events")))

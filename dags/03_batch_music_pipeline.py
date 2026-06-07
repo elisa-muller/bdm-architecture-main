@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from airflow.decorators import dag
 from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 
 # Base path inside the Airflow container
@@ -35,7 +36,7 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="structured_batch",
+    dag_id="03_raw_music",
     description="Batch ingestion pipeline: Last.fm -> MusicBrainz -> ReccoBeats",
     start_date=datetime(2025, 1, 1),
     schedule="0 0 * * *",  # daily
@@ -74,7 +75,16 @@ def structured_batch():
         env=COMMON_ENV,
     )
 
-    lastfm_task >> musicbrainz_task >> reccobeats_task
+    trigger_trusted_music_task = TriggerDagRunOperator(
+        task_id="trigger_08_trusted_music",
+        trigger_dag_id="08_trusted_music",
+        trigger_run_id="raw_music__{{ run_id }}",
+        conf={"source_dag_run_id": "{{ run_id }}"},
+        reset_dag_run=False,
+        skip_when_already_exists=True,
+    )
+
+    lastfm_task >> musicbrainz_task >> reccobeats_task >> trigger_trusted_music_task
 
 
 structured_batch()

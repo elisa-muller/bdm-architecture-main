@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from airflow.decorators import dag
 from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 
 PROJECT_DIR = os.getenv("PROJECT_DIR", "/opt/airflow")
@@ -56,7 +57,7 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="trusted_images_pipeline",
+    dag_id="04_trusted_images",
     description="Run a Spark micro-batch job to clean persisted landing images into the Trusted Zone.",
     start_date=datetime(2025, 1, 1),
     schedule="*/15 * * * *",
@@ -82,7 +83,16 @@ def trusted_images_pipeline():
         env=COMMON_ENV,
     )
 
-    clean_images_task
+    trigger_image_embeddings_task = TriggerDagRunOperator(
+        task_id="trigger_05_image_embeddings",
+        trigger_dag_id="05_image_embeddings",
+        trigger_run_id="trusted_images__{{ run_id }}",
+        conf={"source_dag_run_id": "{{ run_id }}"},
+        reset_dag_run=False,
+        skip_when_already_exists=True,
+    )
+
+    clean_images_task >> trigger_image_embeddings_task
 
 
 trusted_images_pipeline()

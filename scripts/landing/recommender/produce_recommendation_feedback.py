@@ -5,7 +5,7 @@ import os
 import random
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as datetime_time, timedelta, timezone
 
 import boto3
 from kafka import KafkaProducer
@@ -29,10 +29,27 @@ RECOMMENDATION_EVENTS_PREFIX = os.getenv(
 MAX_FEEDBACK_EVENTS = int(os.getenv("MAX_FEEDBACK_EVENTS", "5"))
 RUN_FOREVER = os.getenv("RUN_FOREVER", "false").lower() == "true"
 SLEEP_SECONDS = float(os.getenv("SLEEP_SECONDS", "1"))
+FEEDBACK_EVENT_DAYS_BACK = int(os.getenv("FEEDBACK_EVENT_DAYS_BACK", "0"))
 
 ACCEPT_PROBABILITY = float(os.getenv("FEEDBACK_ACCEPT_PROBABILITY", "0.55"))
 PICK_LOWER_RANK_PROBABILITY = float(os.getenv("FEEDBACK_PICK_LOWER_RANK_PROBABILITY", "0.25"))
 SKIP_PROBABILITY = float(os.getenv("FEEDBACK_SKIP_PROBABILITY", "0.15"))
+
+
+def simulated_event_timestamp() -> str:
+    now = datetime.now(timezone.utc)
+    if FEEDBACK_EVENT_DAYS_BACK <= 0:
+        return now.isoformat()
+
+    days_back = random.randint(0, FEEDBACK_EVENT_DAYS_BACK)
+    event_date = (now - timedelta(days=days_back)).date()
+    event_time = datetime_time(
+        hour=random.randint(8, 23),
+        minute=random.randint(0, 59),
+        second=random.randint(0, 59),
+        tzinfo=timezone.utc,
+    )
+    return datetime.combine(event_date, event_time).isoformat()
 
 
 def build_s3_client():
@@ -113,7 +130,7 @@ def build_feedback_event(recommendation: dict, recommendation_event_key: str) ->
     return {
         "feedback_id": str(uuid.uuid4()),
         "request_id": str(recommendation.get("request_id") or ""),
-        "event_ts": datetime.now(timezone.utc).isoformat(),
+        "event_ts": simulated_event_timestamp(),
         "source": "simulated_recommendation_feedback",
         "platform": str(recommendation.get("platform") or "mock_app"),
         "user_id": os.getenv("FEEDBACK_USER_ID", "mock_user_001"),
@@ -159,6 +176,7 @@ def main() -> None:
     print(f"Producing feedback events to Kafka topic: {TOPIC_RECOMMENDATION_FEEDBACK}")
     print(f"RUN_FOREVER={RUN_FOREVER}")
     print(f"MAX_FEEDBACK_EVENTS={MAX_FEEDBACK_EVENTS}")
+    print(f"FEEDBACK_EVENT_DAYS_BACK={FEEDBACK_EVENT_DAYS_BACK}")
 
     producer = KafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,

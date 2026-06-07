@@ -54,7 +54,7 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="trusted_trends_pipeline",
+    dag_id="06_trusted_trends",
     description="Run a Spark micro-batch job to clean persisted semistructured trend JSONL into the Trusted Zone.",
     start_date=datetime(2025, 1, 1),
     schedule="*/15 * * * *",
@@ -80,16 +80,16 @@ def trusted_trends_pipeline():
         env=COMMON_ENV,
     )
 
-    trigger_exploitation_task = TriggerDagRunOperator(
-        task_id="trigger_exploitation_trends_song_aggregates",
-        trigger_dag_id="exploitation_trends_song_aggregates_pipeline",
+    trigger_trend_features_task = TriggerDagRunOperator(
+        task_id="trigger_07_trend_features",
+        trigger_dag_id="07_trend_features",
         trigger_run_id="trusted_trends__{{ run_id }}",
         conf={"source_dag_run_id": "{{ run_id }}"},
         reset_dag_run=False,
         skip_when_already_exists=True,
     )
 
-    clean_trends_task >> trigger_exploitation_task
+    clean_trends_task >> trigger_trend_features_task
 
 
 trusted_trends_pipeline()

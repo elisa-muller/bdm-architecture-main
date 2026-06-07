@@ -58,10 +58,10 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="song_embeddings_to_milvus_pipeline",
+    dag_id="11_song_index",
     description="Daily hash-based CLIP text embedding refresh for song recommender retrieval.",
     start_date=datetime(2025, 1, 1),
-    schedule="0 2 * * *",
+    schedule=None,
     catchup=False,
     default_args={
         "retries": 1,

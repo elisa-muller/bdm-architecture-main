@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from airflow.decorators import dag, task
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from kafka import KafkaConsumer
 
 
@@ -30,7 +31,7 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("RECOMMENDATION_FEEDBACK_CONSUMER_TIMEOUT_MS
 
 
 @dag(
-    dag_id="consume_recommendation_feedback_raw_to_bronze",
+    dag_id="12_raw_feedback",
     description="Consume recommendation feedback events from Kafka and store them as raw JSONL in Bronze.",
     start_date=datetime(2025, 1, 1),
     schedule="*/5 * * * *",
@@ -184,7 +185,18 @@ def consume_recommendation_feedback_raw_to_bronze():
 
     ingest = consume_to_temporal()
     migration = migrate_to_persistent(ingest)
-    record_metadata(ingest, migration)
+    metadata = record_metadata(ingest, migration)
+
+    trigger_trusted_feedback_task = TriggerDagRunOperator(
+        task_id="trigger_13_trusted_feedback",
+        trigger_dag_id="13_trusted_feedback",
+        trigger_run_id="raw_feedback__{{ run_id }}",
+        conf={"source_dag_run_id": "{{ run_id }}"},
+        reset_dag_run=False,
+        skip_when_already_exists=True,
+    )
+
+    metadata >> trigger_trusted_feedback_task
 
 
 consume_recommendation_feedback_raw_to_bronze()

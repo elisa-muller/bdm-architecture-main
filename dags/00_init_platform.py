@@ -29,7 +29,7 @@ EXPLOITATION_BUCKET = os.getenv("EXPLOITATION_BUCKET", "exploitation")
 
 
 @dag(
-    dag_id="init_platform",
+    dag_id="00_init",
     description="Initialize platform infrastructure: zone buckets, Kafka topics, and folder structure.",
     schedule=None,
     start_date=datetime.now(tz=timezone.utc) - timedelta(days=1),

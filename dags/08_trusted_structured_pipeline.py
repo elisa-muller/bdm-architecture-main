@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from airflow.decorators import dag
 from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 
 
 PROJECT_DIR = os.getenv("PROJECT_DIR", "/opt/airflow")
@@ -51,7 +52,7 @@ COMMON_ENV = {
 
 
 @dag(
-    dag_id="trusted_structured_cleaning_pipeline",
+    dag_id="08_trusted_music",
     description="Clean structured Last.fm, MusicBrainz ISRC and ReccoBeats data into the Trusted Zone.",
     start_date=datetime(2025, 1, 1),
     schedule=None,
@@ -81,7 +82,16 @@ def trusted_structured_cleaning_pipeline():
         env=COMMON_ENV,
     )
 
-    clean_tracks_task >> clean_isrc_task >> clean_reccobeats_task
+    trigger_song_features_task = TriggerDagRunOperator(
+        task_id="trigger_09_song_features",
+        trigger_dag_id="09_song_features",
+        trigger_run_id="trusted_music__{{ run_id }}",
+        conf={"source_dag_run_id": "{{ run_id }}"},
+        reset_dag_run=False,
+        skip_when_already_exists=True,
+    )
+
+    clean_tracks_task >> clean_isrc_task >> clean_reccobeats_task >> trigger_song_features_task
 
 
 trusted_structured_cleaning_pipeline()

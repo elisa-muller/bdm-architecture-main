@@ -29,7 +29,7 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("TRENDS_CONSUMER_TIMEOUT_MS", "5000"))
 
 
 @dag(
-    dag_id="consume_trends_raw_to_bronze",
+    dag_id="02_raw_trends",
     description="Consume semistructured trend events from Kafka, store in temporal, migrate to persistent, record metadata.",
     start_date=datetime(2025, 1, 1),
     schedule="*/5 * * * *",  # every 5 minutes
