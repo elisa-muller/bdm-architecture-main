@@ -2,14 +2,23 @@
 
 import io
 import os
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
 import requests
 from deltalake import DeltaTable, write_deltalake
 from minio import Minio
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from utils.metadata import (  # noqa: E402
+    create_metadata_record,
+    metadata_object_key,
+    write_metadata_minio,
+)
 
 # MinIO / Delta configuration
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
@@ -44,6 +53,9 @@ CHECKPOINT_EVERY_BATCHES = 10
 
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+TEMPORAL_PREFIX = (
+    f"temporal/structured/reccobeats/raw/run_date={run_date}/run_id={run_id}/"
+)
 
 
 # MinIO client
@@ -232,11 +244,7 @@ def flush_feature_batch_rows(batch_feature_rows: List[Dict], flush_number: int) 
     df_batch["run_id"] = run_id
     df_batch["run_date"] = run_date
 
-    temporal_object = (
-        f"temporal/structured/reccobeats/raw/"
-        f"run_date={run_date}/run_id={run_id}/"
-        f"reccobeats_audio_features_batch_{flush_number:05d}.csv"
-    )
+    temporal_object = f"{TEMPORAL_PREFIX}reccobeats_audio_features_batch_{flush_number:05d}.csv"
 
     upload_csv_to_minio(df_batch, MINIO_BUCKET, temporal_object)
     append_to_delta(df_batch, AUDIO_FEATURES_DELTA_URI)
@@ -249,6 +257,44 @@ def flush_feature_batch_rows(batch_feature_rows: List[Dict], flush_number: int) 
     )
 
     return []
+
+
+def record_bronze_metadata(
+    requested_isrcs: int,
+    returned_items: int,
+    batch_count: int,
+    empty_batches: int,
+    flush_count: int,
+) -> str:
+    metadata = create_metadata_record(
+        dataset_name="reccobeats_audio_features",
+        data_type="structured",
+        format_name="csv+delta",
+        source="batch_api",
+        source_system="reccobeats",
+        run_id=run_id,
+        source_path=ISRC_CACHE_DELTA_URI,
+        temporal_path=TEMPORAL_PREFIX,
+        persistent_path="persistent/structured/reccobeats/delta/audio_features_delta",
+        record_count=returned_items,
+        quality_summary={
+            "isrcs_requested": requested_isrcs,
+            "api_batches_sent": batch_count,
+            "empty_batches": empty_batches,
+            "returned_feature_items": returned_items,
+            "csv_batches_written": flush_count,
+        },
+        attributes={
+            "reccobeats_base": RECCOBEATS_BASE,
+            "input_delta_uri": ISRC_CACHE_DELTA_URI,
+            "batch_size": RB_BATCH_SIZE,
+            "checkpoint_every_batches": CHECKPOINT_EVERY_BATCHES,
+        },
+    )
+    metadata_key = metadata_object_key("metadata/structured/reccobeats/", metadata)
+    metadata_uri = write_metadata_minio(minio_client, MINIO_BUCKET, metadata_key, metadata)
+    print(f"[ReccoBeats] Bronze metadata -> {metadata_uri}")
+    return metadata_uri
 
 
 # -----------------------------
@@ -264,6 +310,13 @@ def main():
 
     if df_valid.empty:
         print("[ReccoBeats] No new valid ISRC values to fetch. Exiting.")
+        record_bronze_metadata(
+            requested_isrcs=0,
+            returned_items=0,
+            batch_count=0,
+            empty_batches=0,
+            flush_count=0,
+        )
         return
 
     ids_to_fetch = df_valid["isrc"].drop_duplicates().tolist()
@@ -304,6 +357,13 @@ def main():
         if batch_feature_rows:
             flush_number += 1
             batch_feature_rows = flush_feature_batch_rows(batch_feature_rows, flush_number)
+        record_bronze_metadata(
+            requested_isrcs=len(ids_to_fetch),
+            returned_items=total_returned_items,
+            batch_count=total_batches,
+            empty_batches=total_empty_batches,
+            flush_count=flush_number,
+        )
         print("[ReccoBeats] Partial progress saved.")
         return
 
@@ -327,7 +387,14 @@ def main():
     print(f"[ReccoBeats] Persistent Delta in MinIO: {AUDIO_FEATURES_DELTA_URI}")
     print(
         f"[ReccoBeats] Temporal CSV batches in MinIO: "
-        f"s3://{MINIO_BUCKET}/temporal/structured/reccobeats/raw/run_date={run_date}/run_id={run_id}/"
+        f"s3://{MINIO_BUCKET}/{TEMPORAL_PREFIX}"
+    )
+    record_bronze_metadata(
+        requested_isrcs=len(ids_to_fetch),
+        returned_items=total_returned_items,
+        batch_count=total_batches,
+        empty_batches=total_empty_batches,
+        flush_count=flush_number,
     )
 
 

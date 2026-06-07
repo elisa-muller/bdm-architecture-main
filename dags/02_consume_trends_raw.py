@@ -95,7 +95,12 @@ def consume_trends_raw_to_bronze():
             )
 
             consumer.commit()
-            return {"stored": len(records), "date": date_part, "hour": hour_part}
+            return {
+                "stored": len(records),
+                "date": date_part,
+                "hour": hour_part,
+                "run_id": ts_part,
+            }
 
         finally:
             consumer.close()
@@ -151,12 +156,19 @@ def consume_trends_raw_to_bronze():
         if ingest["stored"] == 0:
             return "No trends to record"
 
-        from utils.metadata import create_metadata_record
+        from utils.metadata import (
+            create_metadata_record,
+            metadata_object_key,
+            write_metadata_boto3,
+        )
 
         metadata = create_metadata_record(
+            dataset_name="raw_music_trends",
             data_type="semi_structured",
             format_name="jsonl",
             source="kafka",
+            source_system=TOPIC_TRENDS_RAW,
+            run_id=f"trends_{ingest['run_id']}",
             temporal_path=(
                 f"temporal/semi_structured/trends/raw/"
                 f"ingest_date={ingest['date']}/"
@@ -168,7 +180,11 @@ def consume_trends_raw_to_bronze():
                 f"ingest_hour={ingest['hour']}/"
             ),
             record_count=ingest["stored"],
-            attributes={"topic": TOPIC_TRENDS_RAW, "migrated": migration["migrated"]},
+            quality_summary={
+                "stored": ingest["stored"],
+                "migrated": migration["migrated"],
+            },
+            attributes={"topic": TOPIC_TRENDS_RAW},
         )
 
         s3 = boto3.client(
@@ -178,14 +194,8 @@ def consume_trends_raw_to_bronze():
             aws_secret_access_key=MINIO_SECRET_KEY,
         )
 
-        metadata_key = (
-            f"metadata/semi_structured/jsonl/{metadata['timestamp'].replace(':', '-')}.json"
-        )
-        s3.put_object(
-            Bucket=BRONZE_BUCKET,
-            Key=metadata_key,
-            Body=json.dumps(metadata, indent=2),
-        )
+        metadata_key = metadata_object_key("metadata/semi_structured/jsonl/", metadata)
+        write_metadata_boto3(s3, BRONZE_BUCKET, metadata_key, metadata)
 
         return f"Metadata recorded: {metadata_key}"
 

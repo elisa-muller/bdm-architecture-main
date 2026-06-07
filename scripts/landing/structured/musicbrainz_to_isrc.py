@@ -3,14 +3,23 @@
 import io
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Tuple
 
 import pandas as pd
 import requests
 from deltalake import DeltaTable, write_deltalake
 from minio import Minio
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from utils.metadata import (  # noqa: E402
+    create_metadata_record,
+    metadata_object_key,
+    write_metadata_minio,
+)
 
 
 # -----------------------------
@@ -63,6 +72,9 @@ MIN_SEARCH_SCORE = int(os.getenv("MIN_SEARCH_SCORE", "85"))
 
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+TEMPORAL_PREFIX = (
+    f"temporal/structured/musicbrainz/raw/run_date={run_date}/run_id={run_id}/"
+)
 
 
 # -----------------------------
@@ -342,11 +354,7 @@ def flush_batch(batch_rows: list, batch_number: int, stats: dict) -> list:
 
     df_batch = pd.DataFrame(batch_rows)
 
-    temporal_object = (
-        f"temporal/structured/musicbrainz/raw/"
-        f"run_date={run_date}/run_id={run_id}/"
-        f"musicbrainz_isrc_batch_{batch_number:05d}.csv"
-    )
+    temporal_object = f"{TEMPORAL_PREFIX}musicbrainz_isrc_batch_{batch_number:05d}.csv"
 
     upload_csv_to_minio(df_batch, MINIO_BUCKET, temporal_object)
     append_to_delta(df_batch, ISRC_CACHE_DELTA_URI)
@@ -362,6 +370,38 @@ def flush_batch(batch_rows: list, batch_number: int, stats: dict) -> list:
         print(f"  {k}: {v}")
 
     return []
+
+
+def record_bronze_metadata(record_count: int, batch_count: int, stats: dict) -> str:
+    metadata = create_metadata_record(
+        dataset_name="musicbrainz_isrc_resolution",
+        data_type="structured",
+        format_name="csv+delta",
+        source="batch_api",
+        source_system="musicbrainz",
+        run_id=run_id,
+        source_path=LASTFM_TRACKS_DELTA_URI,
+        temporal_path=TEMPORAL_PREFIX,
+        persistent_path="persistent/structured/musicbrainz/delta/isrc_cache_delta",
+        record_count=record_count,
+        quality_summary={
+            "processed_tracks": record_count,
+            "csv_batches_written": batch_count,
+            "status_counts": stats,
+        },
+        attributes={
+            "musicbrainz_base": MUSICBRAINZ_BASE,
+            "input_delta_uri": LASTFM_TRACKS_DELTA_URI,
+            "checkpoint_every": CHECKPOINT_EVERY,
+            "max_mbids_per_run": MAX_MBIDS_PER_RUN,
+            "search_limit": SEARCH_LIMIT,
+            "minimum_search_score": MIN_SEARCH_SCORE,
+        },
+    )
+    metadata_key = metadata_object_key("metadata/structured/musicbrainz/", metadata)
+    metadata_uri = write_metadata_minio(minio_client, MINIO_BUCKET, metadata_key, metadata)
+    print(f"[MusicBrainz] Bronze metadata -> {metadata_uri}")
+    return metadata_uri
 
 
 # -----------------------------
@@ -516,6 +556,11 @@ def main():
             batch_number += 1
             batch_rows = flush_batch(batch_rows, batch_number, stats)
 
+        record_bronze_metadata(
+            record_count=len(df_to_process),
+            batch_count=batch_number,
+            stats=stats,
+        )
         print("[MusicBrainz] Partial progress saved.")
         return
 
@@ -533,8 +578,12 @@ def main():
     print(f"\n[MusicBrainz] Persistent Delta in MinIO: {ISRC_CACHE_DELTA_URI}")
     print(
         f"[MusicBrainz] Temporal CSV batches in MinIO: "
-        f"s3://{MINIO_BUCKET}/temporal/structured/musicbrainz/raw/"
-        f"run_date={run_date}/run_id={run_id}/"
+        f"s3://{MINIO_BUCKET}/{TEMPORAL_PREFIX}"
+    )
+    record_bronze_metadata(
+        record_count=len(df_to_process),
+        batch_count=batch_number,
+        stats=stats,
     )
 
 

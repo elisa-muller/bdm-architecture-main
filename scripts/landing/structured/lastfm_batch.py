@@ -2,8 +2,10 @@
 
 import io
 import os
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -11,6 +13,13 @@ from dotenv import load_dotenv
 from minio import Minio
 from minio.error import S3Error
 from deltalake import DeltaTable, write_deltalake
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from utils.metadata import (  # noqa: E402
+    create_metadata_record,
+    metadata_object_key,
+    write_metadata_minio,
+)
 
 load_dotenv()
 
@@ -260,7 +269,7 @@ def deduplicate_track_inventory(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["_track_identity_key"]).reset_index(drop=True)
 
 
-def write_raw_delta_to_minio(df_raw: pd.DataFrame, delta_uri: str) -> None:
+def write_raw_delta_to_minio(df_raw: pd.DataFrame, delta_uri: str) -> dict:
     if delta_table_exists(delta_uri):
         df_existing = load_delta_as_df(delta_uri)
         df_to_write = pd.concat([df_existing, df_raw], ignore_index=True)
@@ -285,6 +294,45 @@ def write_raw_delta_to_minio(df_raw: pd.DataFrame, delta_uri: str) -> None:
     print(f"[Last.fm] Delta write mode: {DELTA_WRITE_MODE}")
     print(f"[Last.fm] Delta rows before dedup: {rows_before_dedup}")
     print(f"[Last.fm] Delta rows after dedup: {rows_after_dedup}")
+
+    return {
+        "rows_before_dedup": rows_before_dedup,
+        "rows_after_dedup": rows_after_dedup,
+        "delta_write_mode": DELTA_WRITE_MODE,
+    }
+
+
+def record_bronze_metadata(raw_object: str, record_count: int, delta_stats: dict) -> str:
+    metadata = create_metadata_record(
+        dataset_name="lastfm_raw_tracks",
+        data_type="structured",
+        format_name="csv+delta",
+        source="batch_api",
+        source_system="lastfm",
+        run_id=run_id,
+        source_path=API_URL,
+        temporal_path=raw_object,
+        persistent_path="persistent/structured/lastfm/delta/tracks_delta",
+        record_count=record_count,
+        quality_summary={
+            "raw_rows_collected": record_count,
+            "rows_before_dedup": delta_stats["rows_before_dedup"],
+            "rows_after_dedup": delta_stats["rows_after_dedup"],
+        },
+        attributes={
+            "api_methods": ["chart.getTopTracks", "tag.getTopTracks", "geo.getTopTracks"],
+            "chart_pages": chart_pages,
+            "tag_count": len(tags),
+            "tag_pages": tag_pages,
+            "country_count": len(countries),
+            "geo_pages": geo_pages,
+            "delta_write_mode": delta_stats["delta_write_mode"],
+        },
+    )
+    metadata_key = metadata_object_key("metadata/structured/lastfm/", metadata)
+    metadata_uri = write_metadata_minio(minio_client, MINIO_BUCKET, metadata_key, metadata)
+    print(f"[Last.fm] Bronze metadata -> {metadata_uri}")
+    return metadata_uri
 
 
 # -----------------------------
@@ -331,7 +379,8 @@ def main():
     )
 
     upload_csv_to_minio(df_raw, MINIO_BUCKET, raw_object)
-    write_raw_delta_to_minio(df_raw, DELTA_URI)
+    delta_stats = write_raw_delta_to_minio(df_raw, DELTA_URI)
+    record_bronze_metadata(raw_object, len(df_raw), delta_stats)
 
     print("\n[Last.fm] Pipeline finished successfully.")
     print(f"[Last.fm] Temporal raw CSV        -> s3://{MINIO_BUCKET}/{raw_object}")

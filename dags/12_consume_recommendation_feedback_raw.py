@@ -90,7 +90,12 @@ def consume_recommendation_feedback_raw_to_bronze():
             )
 
             consumer.commit()
-            return {"stored": len(records), "date": date_part, "hour": hour_part}
+            return {
+                "stored": len(records),
+                "date": date_part,
+                "hour": hour_part,
+                "run_id": ts_part,
+            }
         finally:
             consumer.close()
 
@@ -139,12 +144,19 @@ def consume_recommendation_feedback_raw_to_bronze():
         if ingest["stored"] == 0:
             return "No feedback to record"
 
-        from utils.metadata import create_metadata_record
+        from utils.metadata import (
+            create_metadata_record,
+            metadata_object_key,
+            write_metadata_boto3,
+        )
 
         metadata = create_metadata_record(
+            dataset_name="raw_recommendation_feedback",
             data_type="semi_structured",
             format_name="jsonl",
             source="kafka",
+            source_system=TOPIC_RECOMMENDATION_FEEDBACK,
+            run_id=f"feedback_{ingest['run_id']}",
             temporal_path=(
                 "temporal/recommender/feedback/raw/"
                 f"ingest_date={ingest['date']}/"
@@ -156,9 +168,12 @@ def consume_recommendation_feedback_raw_to_bronze():
                 f"ingest_hour={ingest['hour']}/"
             ),
             record_count=ingest["stored"],
+            quality_summary={
+                "stored": ingest["stored"],
+                "migrated": migration["migrated"],
+            },
             attributes={
                 "topic": TOPIC_RECOMMENDATION_FEEDBACK,
-                "migrated": migration["migrated"],
                 "event_family": "recommendation_feedback",
             },
         )
@@ -170,16 +185,11 @@ def consume_recommendation_feedback_raw_to_bronze():
             aws_secret_access_key=MINIO_SECRET_KEY,
         )
 
-        metadata_key = (
-            "metadata/recommender/feedback/jsonl/"
-            f"{metadata['timestamp'].replace(':', '-')}.json"
+        metadata_key = metadata_object_key(
+            "metadata/recommender/feedback/jsonl/",
+            metadata,
         )
-        s3.put_object(
-            Bucket=BRONZE_BUCKET,
-            Key=metadata_key,
-            Body=json.dumps(metadata, indent=2).encode("utf-8"),
-            ContentType="application/json",
-        )
+        write_metadata_boto3(s3, BRONZE_BUCKET, metadata_key, metadata)
 
         return f"Metadata recorded: {metadata_key}"
 

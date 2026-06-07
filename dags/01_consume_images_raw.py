@@ -61,7 +61,9 @@ def consume_images_raw_to_bronze():
         )
 
         stored = 0
-        date_part = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        date_part = now.strftime("%Y-%m-%d")
+        run_id = now.strftime("%Y%m%dT%H%M%SZ")
 
         try:
             for message in consumer:
@@ -88,10 +90,10 @@ def consume_images_raw_to_bronze():
                     break
 
             if stored == 0:
-                return {"stored": 0, "date": date_part}
+                return {"stored": 0, "date": date_part, "run_id": run_id}
 
             consumer.commit()
-            return {"stored": stored, "date": date_part}
+            return {"stored": stored, "date": date_part, "run_id": run_id}
 
         finally:
             consumer.close()
@@ -138,16 +140,27 @@ def consume_images_raw_to_bronze():
         if ingest["stored"] == 0:
             return "No images to record"
 
-        from utils.metadata import create_metadata_record
+        from utils.metadata import (
+            create_metadata_record,
+            metadata_object_key,
+            write_metadata_boto3,
+        )
 
         metadata = create_metadata_record(
+            dataset_name="raw_music_images",
             data_type="unstructured",
             format_name="image",
             source="kafka",
+            source_system=TOPIC_IMAGES_RAW,
+            run_id=f"images_{ingest['run_id']}",
             temporal_path=f"temporal/unstructured/images/raw/ingest_date={ingest['date']}/",
             persistent_path=f"persistent/unstructured/images/raw/ingest_date={ingest['date']}/",
             record_count=ingest["stored"],
-            attributes={"topic": TOPIC_IMAGES_RAW, "migrated": migration["migrated"]},
+            quality_summary={
+                "stored": ingest["stored"],
+                "migrated": migration["migrated"],
+            },
+            attributes={"topic": TOPIC_IMAGES_RAW},
         )
 
         s3 = boto3.client(
@@ -157,14 +170,8 @@ def consume_images_raw_to_bronze():
             aws_secret_access_key=MINIO_SECRET_KEY,
         )
 
-        metadata_key = (
-            f"metadata/unstructured/image/{metadata['timestamp'].replace(':', '-')}.json"
-        )
-        s3.put_object(
-            Bucket=BRONZE_BUCKET,
-            Key=metadata_key,
-            Body=json.dumps(metadata, indent=2),
-        )
+        metadata_key = metadata_object_key("metadata/unstructured/image/", metadata)
+        write_metadata_boto3(s3, BRONZE_BUCKET, metadata_key, metadata)
 
         return f"Metadata recorded: {metadata_key}"
 
