@@ -20,10 +20,10 @@ TOPIC_RECOMMENDATION_FEEDBACK = os.getenv(
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-EXPLOITATION_BUCKET = os.getenv("EXPLOITATION_BUCKET", "exploitation")
+CONSUMPTION_BUCKET = os.getenv("CONSUMPTION_BUCKET", "consumption")
 RECOMMENDATION_EVENTS_PREFIX = os.getenv(
     "RECOMMENDATION_EVENTS_PREFIX",
-    "consumption/recommendations/recommendation_events/",
+    "recommendations/recommendation_events/",
 ).strip("/")
 
 MAX_FEEDBACK_EVENTS = int(os.getenv("MAX_FEEDBACK_EVENTS", "5"))
@@ -64,7 +64,7 @@ def build_s3_client():
 def list_recommendation_event_keys(client) -> list[str]:
     paginator = client.get_paginator("list_objects_v2")
     keys: list[str] = []
-    for page in paginator.paginate(Bucket=EXPLOITATION_BUCKET, Prefix=RECOMMENDATION_EVENTS_PREFIX):
+    for page in paginator.paginate(Bucket=CONSUMPTION_BUCKET, Prefix=RECOMMENDATION_EVENTS_PREFIX):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith(".json"):
@@ -73,7 +73,7 @@ def list_recommendation_event_keys(client) -> list[str]:
 
 
 def load_recommendation_event(client, key: str) -> dict:
-    response = client.get_object(Bucket=EXPLOITATION_BUCKET, Key=key)
+    response = client.get_object(Bucket=CONSUMPTION_BUCKET, Key=key)
     return json.loads(response["Body"].read().decode("utf-8"))
 
 
@@ -168,7 +168,7 @@ def main() -> None:
     if not keys:
         print(
             "No recommendation events found. Run the recommender first so feedback "
-            f"can be simulated from s3://{EXPLOITATION_BUCKET}/{RECOMMENDATION_EVENTS_PREFIX}"
+            f"can be simulated from s3://{CONSUMPTION_BUCKET}/{RECOMMENDATION_EVENTS_PREFIX}"
         )
         return
 

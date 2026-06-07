@@ -4,7 +4,7 @@ import io
 import os
 from datetime import datetime, timedelta, timezone
 
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 
 
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
@@ -26,6 +26,7 @@ TOPIC_RECOMMENDATION_FEEDBACK = os.getenv(
 BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
 TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
 EXPLOITATION_BUCKET = os.getenv("EXPLOITATION_BUCKET", "exploitation")
+CONSUMPTION_BUCKET = os.getenv("CONSUMPTION_BUCKET", "consumption")
 
 
 @dag(
@@ -52,7 +53,7 @@ def init_platform():
             secure=secure,
         )
 
-        buckets = [BRONZE_BUCKET, TRUSTED_BUCKET, EXPLOITATION_BUCKET]
+        buckets = [BRONZE_BUCKET, TRUSTED_BUCKET, EXPLOITATION_BUCKET, CONSUMPTION_BUCKET]
         created_or_existing = []
 
         for bucket_name in buckets:
@@ -107,21 +108,22 @@ def init_platform():
             f"{TRUSTED_BUCKET}:metadata/recommender/feedback/",
 
             # Exploitation
-            f"{EXPLOITATION_BUCKET}:structured/music_analytics/delta/",
-            f"{EXPLOITATION_BUCKET}:semi_structured/trends_analytics/delta/",
+            f"{EXPLOITATION_BUCKET}:structured/song_audio_features/delta/",
+            f"{EXPLOITATION_BUCKET}:semi_structured/trends/delta/",
             f"{EXPLOITATION_BUCKET}:recommender/song_features/delta/",
             f"{EXPLOITATION_BUCKET}:recommender/song_embeddings/delta/",
-            f"{EXPLOITATION_BUCKET}:unstructured/images/embeddings/",
-            f"{EXPLOITATION_BUCKET}:consumption/recommendations/",
-            f"{EXPLOITATION_BUCKET}:consumption/recommendations/image_context_events/",
-            f"{EXPLOITATION_BUCKET}:consumption/recommendations/recommendation_events/",
-            f"{EXPLOITATION_BUCKET}:consumption/recommendations/feedback_events_delta/",
-            f"{EXPLOITATION_BUCKET}:consumption/recommendations/feedback_summary_delta/",
-            f"{EXPLOITATION_BUCKET}:consumption/recommendations/recommendation_outcomes_delta/",
+            f"{EXPLOITATION_BUCKET}:metadata/structured/song_audio_features/",
+            f"{EXPLOITATION_BUCKET}:metadata/semi_structured/trends/",
             f"{EXPLOITATION_BUCKET}:metadata/recommender/song_features/",
             f"{EXPLOITATION_BUCKET}:metadata/recommender/song_embeddings/",
-            f"{EXPLOITATION_BUCKET}:metadata/recommender/feedback/",
             f"{EXPLOITATION_BUCKET}:metadata/",
+
+            # Consumption
+            f"{CONSUMPTION_BUCKET}:recommendations/",
+            f"{CONSUMPTION_BUCKET}:recommendations/image_context_events/",
+            f"{CONSUMPTION_BUCKET}:recommendations/recommendation_events/",
+            f"{CONSUMPTION_BUCKET}:metadata/recommender/feedback/",
+            f"{CONSUMPTION_BUCKET}:metadata/",
         ]
 
         created = []

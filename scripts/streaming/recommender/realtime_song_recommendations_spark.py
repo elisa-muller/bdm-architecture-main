@@ -245,10 +245,10 @@ def recommendation_event(event: dict, embedder: ClipImageEmbedder) -> dict | Non
 
 def write_recommendation_events(events: list[dict], batch_id: int) -> None:
     client = build_s3_client()
-    bucket = env("EXPLOITATION_BUCKET", "exploitation")
+    bucket = env("CONSUMPTION_BUCKET", "consumption")
     prefix = env(
         "RECOMMENDATION_EVENTS_PREFIX",
-        "consumption/recommendations/recommendation_events/",
+        "recommendations/recommendation_events/",
     ).strip("/")
 
     ensure_bucket(client, bucket)

@@ -44,6 +44,7 @@ def storage_options() -> dict[str, str]:
 
 
 EXPLOITATION_BUCKET = env("EXPLOITATION_BUCKET", "exploitation")
+CONSUMPTION_BUCKET = env("CONSUMPTION_BUCKET", "consumption")
 
 SOURCES = {
     "trends": DeltaSource(
@@ -73,16 +74,16 @@ SOURCES = {
     "feedback_summary": DeltaSource(
         label="Recommendation feedback summary",
         uri=env(
-            "EXPLOITATION_RECOMMENDATION_FEEDBACK_SUMMARY_DELTA_URI",
-            f"s3://{EXPLOITATION_BUCKET}/consumption/recommendations/feedback_summary_delta",
+            "CONSUMPTION_RECOMMENDATION_FEEDBACK_SUMMARY_DELTA_URI",
+            f"s3://{CONSUMPTION_BUCKET}/recommendations/feedback_summary_delta",
         ),
         description="Daily recommendation acceptance and satisfaction KPIs.",
     ),
     "outcomes": DeltaSource(
         label="Recommendation outcomes",
         uri=env(
-            "EXPLOITATION_RECOMMENDATION_OUTCOMES_DELTA_URI",
-            f"s3://{EXPLOITATION_BUCKET}/consumption/recommendations/recommendation_outcomes_delta",
+            "CONSUMPTION_RECOMMENDATION_OUTCOMES_DELTA_URI",
+            f"s3://{CONSUMPTION_BUCKET}/recommendations/recommendation_outcomes_delta",
         ),
         description="Recommendation requests joined with latest feedback outcome.",
     ),

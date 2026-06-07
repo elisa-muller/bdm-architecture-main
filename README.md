@@ -1,6 +1,6 @@
 # BDM P2: Music Intelligence Lakehouse
 
-This repository contains the second part of the Big Data Management architecture project. It extends the P1 Landing Zone into a complete local lakehouse-style platform with Bronze, Trusted, and Exploitation layers, orchestrated with Airflow and supported by Kafka, MinIO, Spark, Milvus, and a Streamlit dashboard.
+This repository contains the second part of the Big Data Management architecture project. It extends the P1 Landing Zone into a complete local lakehouse-style platform with Bronze, Trusted, Exploitation, and Consumption layers, orchestrated with Airflow and supported by Kafka, MinIO, Spark, Milvus, and a Streamlit dashboard.
 
 The platform integrates four data families:
 
@@ -29,7 +29,8 @@ The project is organized into the following zones:
 
 - `Bronze`: raw and persistent ingested data from Kafka streams and batch APIs.
 - `Trusted`: cleaned and standardized datasets for images, trends, music, and feedback.
-- `Exploitation`: analytical outputs, recommender features, embeddings, Milvus indexes, and dashboard-ready metrics.
+- `Exploitation`: analytical outputs, recommender features, embeddings, and Milvus indexes.
+- `Consumption`: dashboard-facing recommendation events, feedback summaries, and final recommendation outcome tables.
 
 Airflow coordinates ingestion, cleaning, feature generation, embedding creation, Milvus indexing, and feedback analytics. Scheduled DAGs handle continuously arriving data, while heavier downstream transformations are manual or triggered after upstream success.
 
@@ -47,7 +48,7 @@ The architecture combines streaming and batch processing:
 | Component | Role |
 |---|---|
 | Kafka | Streaming buffer for images, trends, recommendation requests, and feedback |
-| MinIO | S3-compatible storage for Bronze, Trusted, and Exploitation zones |
+| MinIO | S3-compatible storage for Bronze, Trusted, Exploitation, and Consumption zones |
 | Airflow | Orchestration of all DAGs |
 | Spark | Batch transformations and feature generation |
 | Milvus | Vector database for song embeddings |
@@ -112,7 +113,14 @@ The final Exploitation Zone produces the assets used for analysis and consumptio
 - Recommender feature tables joining music and trend information.
 - Song embedding snapshots and Milvus indexes for similarity search.
 - Trusted image embeddings for image-based recommendation experiments.
-- Recommendation outcome and feedback summary tables for evaluation.
+
+Consumption outputs are stored separately in the `consumption` bucket:
+
+- Image context event logs.
+- Recommendation event logs.
+- Feedback event tables.
+- Feedback summary tables.
+- Recommendation outcome tables.
 
 ## Dashboard
 

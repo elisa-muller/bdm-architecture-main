@@ -150,10 +150,10 @@ def event_to_context(event: dict, embedder: ClipEmbedder, labels: list[str]) -> 
 
 def write_context_events(events: list[dict], batch_id: int) -> None:
     client = build_s3_client()
-    bucket = env("EXPLOITATION_BUCKET", "exploitation")
+    bucket = env("CONSUMPTION_BUCKET", "consumption")
     prefix = env(
         "IMAGE_CONTEXT_EVENTS_PREFIX",
-        "consumption/recommendations/image_context_events/",
+        "recommendations/image_context_events/",
     ).strip("/")
 
     ensure_bucket(client, bucket)

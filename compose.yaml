@@ -48,6 +48,7 @@ x-airflow-common:
     BRONZE_BUCKET: 'bronze'
     TRUSTED_BUCKET: 'trusted'
     EXPLOITATION_BUCKET: 'exploitation'
+    CONSUMPTION_BUCKET: 'consumption'
     BRONZE_IMAGES_PATH: 'music_images_raw'
     BRONZE_TRENDS_PATH: 'music_trends_raw'
     TRUSTED_IMAGE_MAX_IMAGES: '50'
@@ -270,12 +271,12 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
-      EXPLOITATION_BUCKET: exploitation
+      CONSUMPTION_BUCKET: consumption
       IMAGE_EMBEDDING_MODEL: openai/clip-vit-base-patch32
       IMAGE_EMBEDDING_DIM: "512"
       IMAGE_CONTEXT_TOP_K: "3"
       IMAGE_CONTEXT_LABELS: party,night out,energetic,happy,chill,relaxing,sad,romantic,workout,travel,beach,study,urban,nature
-      IMAGE_CONTEXT_EVENTS_PREFIX: consumption/recommendations/image_context_events/
+      IMAGE_CONTEXT_EVENTS_PREFIX: recommendations/image_context_events/
       REALTIME_IMAGE_TRIGGER_SECONDS: "45"
       REALTIME_IMAGE_MAX_OFFSETS_PER_TRIGGER: "1"
       REALTIME_IMAGE_CHECKPOINT_PATH: /tmp/realtime-image-context-checkpoint
@@ -321,9 +322,9 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
-      EXPLOITATION_BUCKET: exploitation
+      CONSUMPTION_BUCKET: consumption
       EXPLOITATION_RECOMMENDER_FEATURES_DELTA_URI: s3://exploitation/recommender/song_features/delta/song_recommender_features_delta
-      RECOMMENDATION_EVENTS_PREFIX: consumption/recommendations/recommendation_events/
+      RECOMMENDATION_EVENTS_PREFIX: recommendations/recommendation_events/
       MILVUS_HOST: milvus-standalone
       MILVUS_PORT: "19530"
       MILVUS_SONG_COLLECTION: song_recommender_embeddings
@@ -364,8 +365,8 @@ services:
       MINIO_ENDPOINT: 'http://minio:9000'
       MINIO_ACCESS_KEY: 'minioadmin'
       MINIO_SECRET_KEY: 'minioadmin'
-      EXPLOITATION_BUCKET: 'exploitation'
-      RECOMMENDATION_EVENTS_PREFIX: 'consumption/recommendations/recommendation_events/'
+      CONSUMPTION_BUCKET: 'consumption'
+      RECOMMENDATION_EVENTS_PREFIX: 'recommendations/recommendation_events/'
       MAX_FEEDBACK_EVENTS: '5'
       RUN_FOREVER: 'false'
       SLEEP_SECONDS: '1'
@@ -570,11 +571,12 @@ services:
       MINIO_ACCESS_KEY: 'minioadmin'
       MINIO_SECRET_KEY: 'minioadmin'
       EXPLOITATION_BUCKET: 'exploitation'
+      CONSUMPTION_BUCKET: 'consumption'
       EXPLOITATION_TRENDS_AGG_DELTA_URI: 's3://exploitation/semi_structured/trends/delta/song_trend_aggregates_delta'
       EXPLOITATION_SONG_AUDIO_FEATURES_DELTA_URI: 's3://exploitation/structured/song_audio_features/delta/song_audio_features_delta'
       EXPLOITATION_RECOMMENDER_FEATURES_DELTA_URI: 's3://exploitation/recommender/song_features/delta/song_recommender_features_delta'
-      EXPLOITATION_RECOMMENDATION_FEEDBACK_SUMMARY_DELTA_URI: 's3://exploitation/consumption/recommendations/feedback_summary_delta'
-      EXPLOITATION_RECOMMENDATION_OUTCOMES_DELTA_URI: 's3://exploitation/consumption/recommendations/recommendation_outcomes_delta'
+      CONSUMPTION_RECOMMENDATION_FEEDBACK_SUMMARY_DELTA_URI: 's3://consumption/recommendations/feedback_summary_delta'
+      CONSUMPTION_RECOMMENDATION_OUTCOMES_DELTA_URI: 's3://consumption/recommendations/recommendation_outcomes_delta'
     volumes:
       - ./scripts/consumption/dashboard:/app/dashboard
     depends_on:

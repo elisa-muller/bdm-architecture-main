@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from kafka import KafkaConsumer
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 
 # Add scripts to path for imports
 AIRFLOW_HOME = os.getenv("AIRFLOW_HOME", "/opt/airflow")

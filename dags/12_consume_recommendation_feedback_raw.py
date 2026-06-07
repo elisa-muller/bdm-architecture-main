@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import boto3
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from kafka import KafkaConsumer
 
