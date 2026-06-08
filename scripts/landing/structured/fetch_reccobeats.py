@@ -26,7 +26,7 @@ MINIO_ENDPOINT = MINIO_ENDPOINT.replace("http://", "").replace("https://", "").r
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
-MINIO_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+MINIO_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 
 ISRC_CACHE_DELTA_URI = (
     f"s3://{MINIO_BUCKET}/persistent/structured/musicbrainz/delta/isrc_cache_delta"
@@ -259,7 +259,7 @@ def flush_feature_batch_rows(batch_feature_rows: List[Dict], flush_number: int) 
     return []
 
 
-def record_bronze_metadata(
+def record_landing_metadata(
     requested_isrcs: int,
     returned_items: int,
     batch_count: int,
@@ -293,7 +293,7 @@ def record_bronze_metadata(
     )
     metadata_key = metadata_object_key("metadata/structured/reccobeats/", metadata)
     metadata_uri = write_metadata_minio(minio_client, MINIO_BUCKET, metadata_key, metadata)
-    print(f"[ReccoBeats] Bronze metadata -> {metadata_uri}")
+    print(f"[ReccoBeats] Landing metadata -> {metadata_uri}")
     return metadata_uri
 
 
@@ -310,7 +310,7 @@ def main():
 
     if df_valid.empty:
         print("[ReccoBeats] No new valid ISRC values to fetch. Exiting.")
-        record_bronze_metadata(
+        record_landing_metadata(
             requested_isrcs=0,
             returned_items=0,
             batch_count=0,
@@ -357,7 +357,7 @@ def main():
         if batch_feature_rows:
             flush_number += 1
             batch_feature_rows = flush_feature_batch_rows(batch_feature_rows, flush_number)
-        record_bronze_metadata(
+        record_landing_metadata(
             requested_isrcs=len(ids_to_fetch),
             returned_items=total_returned_items,
             batch_count=total_batches,
@@ -389,7 +389,7 @@ def main():
         f"[ReccoBeats] Temporal CSV batches in MinIO: "
         f"s3://{MINIO_BUCKET}/{TEMPORAL_PREFIX}"
     )
-    record_bronze_metadata(
+    record_landing_metadata(
         requested_isrcs=len(ids_to_fetch),
         returned_items=total_returned_items,
         batch_count=total_batches,

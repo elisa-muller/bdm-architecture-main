@@ -21,9 +21,9 @@ TOPIC_IMAGES_RAW = os.getenv("TOPIC_IMAGES_RAW", "music-images-raw")
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
-BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+LANDING_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 
-CONSUMER_GROUP = "airflow-images-bronze"
+CONSUMER_GROUP = "airflow-images-landing"
 MAX_MESSAGES = int(os.getenv("IMAGES_MAX_MESSAGES", "20"))
 CONSUMER_TIMEOUT_MS = int(os.getenv("IMAGES_CONSUMER_TIMEOUT_MS", "5000"))
 
@@ -35,9 +35,9 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("IMAGES_CONSUMER_TIMEOUT_MS", "5000"))
     schedule="*/1 * * * *",
     catchup=False,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
-    tags=["images", "kafka", "bronze", "unstructured"],
+    tags=["images", "kafka", "landing", "unstructured"],
 )
-def consume_images_raw_to_bronze():
+def consume_images_raw_to_landing():
 
     @task()
     def consume_to_temporal() -> dict:
@@ -79,7 +79,7 @@ def consume_images_raw_to_bronze():
                 )
 
                 s3.put_object(
-                    Bucket=BRONZE_BUCKET,
+                    Bucket=LANDING_BUCKET,
                     Key=object_key,
                     Body=content,
                     ContentType=event.get("mime_type", "image/jpeg"),
@@ -117,7 +117,7 @@ def consume_images_raw_to_bronze():
 
         migrated = 0
         paginator = s3.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=BRONZE_BUCKET, Prefix=temporal_prefix)
+        pages = paginator.paginate(Bucket=LANDING_BUCKET, Prefix=temporal_prefix)
 
         for page in pages:
             if "Contents" not in page:
@@ -125,11 +125,11 @@ def consume_images_raw_to_bronze():
             for obj in page["Contents"]:
                 dest_key = obj["Key"].replace(temporal_prefix, persistent_prefix)
                 s3.copy_object(
-                    CopySource={"Bucket": BRONZE_BUCKET, "Key": obj["Key"]},
-                    Bucket=BRONZE_BUCKET,
+                    CopySource={"Bucket": LANDING_BUCKET, "Key": obj["Key"]},
+                    Bucket=LANDING_BUCKET,
                     Key=dest_key,
                 )
-                s3.delete_object(Bucket=BRONZE_BUCKET, Key=obj["Key"])
+                s3.delete_object(Bucket=LANDING_BUCKET, Key=obj["Key"])
                 migrated += 1
 
         return {"migrated": migrated, "date": date_part}
@@ -171,7 +171,7 @@ def consume_images_raw_to_bronze():
         )
 
         metadata_key = metadata_object_key("metadata/unstructured/image/", metadata)
-        write_metadata_boto3(s3, BRONZE_BUCKET, metadata_key, metadata)
+        write_metadata_boto3(s3, LANDING_BUCKET, metadata_key, metadata)
 
         return f"Metadata recorded: {metadata_key}"
 
@@ -181,4 +181,4 @@ def consume_images_raw_to_bronze():
     record_metadata(ingest, migration)
 
 
-consume_images_raw_to_bronze()
+consume_images_raw_to_landing()

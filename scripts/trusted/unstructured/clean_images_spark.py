@@ -19,9 +19,9 @@ ENV_NAMES = [
     "MINIO_SECRET_KEY",
     "MINIO_ROOT_USER",
     "MINIO_ROOT_PASSWORD",
-    "BRONZE_BUCKET",
+    "LANDING_BUCKET",
     "TRUSTED_BUCKET",
-    "BRONZE_IMAGES_PREFIX",
+    "LANDING_IMAGES_PREFIX",
     "TRUSTED_IMAGES_PREFIX",
     "TRUSTED_REJECTED_PREFIX",
     "TRUSTED_METADATA_PREFIX",
@@ -36,7 +36,14 @@ VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def env(name: str, default: str) -> str:
-    return os.getenv(name, default)
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    if name.startswith("LANDING_"):
+        legacy_value = os.getenv(name.replace("LANDING_", "BRONZE_", 1))
+        if legacy_value is not None:
+            return legacy_value
+    return default
 
 
 def build_s3_client():
@@ -58,15 +65,15 @@ def ensure_bucket_exists(s3, bucket_name: str) -> None:
         s3.create_bucket(Bucket=bucket_name)
 
 
-def trusted_key_for(source_key: str, bronze_prefix: str, trusted_prefix: str) -> str:
-    relative_key = source_key.removeprefix(bronze_prefix)
+def trusted_key_for(source_key: str, landing_prefix: str, trusted_prefix: str) -> str:
+    relative_key = source_key.removeprefix(landing_prefix)
     relative_path = PurePosixPath(relative_key)
     parent = "" if str(relative_path.parent) == "." else f"{relative_path.parent}/"
     return f"{trusted_prefix}{parent}{relative_path.stem}.jpg"
 
 
-def rejected_key_for(source_key: str, bronze_prefix: str, rejected_prefix: str) -> str:
-    relative_key = source_key.removeprefix(bronze_prefix)
+def rejected_key_for(source_key: str, landing_prefix: str, rejected_prefix: str) -> str:
+    relative_key = source_key.removeprefix(landing_prefix)
     return f"{rejected_prefix}{relative_key}.json"
 
 
@@ -139,9 +146,9 @@ def target_exists(s3, bucket_name: str, key: str) -> bool:
 def process_partition(rows):
     s3 = build_s3_client()
 
-    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    landing_bucket = env("LANDING_BUCKET", "landing")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
-    bronze_prefix = env("BRONZE_IMAGES_PREFIX", "persistent/unstructured/images/raw/")
+    landing_prefix = env("LANDING_IMAGES_PREFIX", "persistent/unstructured/images/raw/")
     trusted_prefix = env("TRUSTED_IMAGES_PREFIX", "unstructured/images/clean/")
     rejected_prefix = env("TRUSTED_REJECTED_PREFIX", "unstructured/images/rejected/")
     resize_max_dim = int(env("TRUSTED_IMAGE_RESIZE_MAX_DIM", "512"))
@@ -151,9 +158,9 @@ def process_partition(rows):
 
     for obj in rows:
         source_key = obj["Key"]
-        target_key = trusted_key_for(source_key, bronze_prefix, trusted_prefix)
+        target_key = trusted_key_for(source_key, landing_prefix, trusted_prefix)
         result = {
-            "source_bucket": bronze_bucket,
+            "source_bucket": landing_bucket,
             "source_key": source_key,
             "processed_at_utc": processed_at,
             "status": "unknown",
@@ -171,7 +178,7 @@ def process_partition(rows):
                 yield result
                 continue
 
-            response = s3.get_object(Bucket=bronze_bucket, Key=source_key)
+            response = s3.get_object(Bucket=landing_bucket, Key=source_key)
             content = response["Body"].read()
             cleaned, image_metadata = clean_image(content, resize_max_dim, jpeg_quality)
 
@@ -181,7 +188,7 @@ def process_partition(rows):
                 Body=cleaned,
                 ContentType="image/jpeg",
                 Metadata={
-                    "source-bucket": bronze_bucket,
+                    "source-bucket": landing_bucket,
                     "source-key-sha256": hashlib.sha256(source_key.encode("utf-8")).hexdigest(),
                     "cleaned-at-utc": processed_at,
                 },
@@ -205,7 +212,7 @@ def process_partition(rows):
                     "error": str(exc),
                 }
             )
-            write_json(s3, trusted_bucket, rejected_key_for(source_key, bronze_prefix, rejected_prefix), result)
+            write_json(s3, trusted_bucket, rejected_key_for(source_key, landing_prefix, rejected_prefix), result)
 
         yield result
 
@@ -224,9 +231,9 @@ def build_spark(processed_at: str) -> SparkSession:
 
 
 def main() -> None:
-    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    landing_bucket = env("LANDING_BUCKET", "landing")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
-    bronze_prefix = env("BRONZE_IMAGES_PREFIX", "persistent/unstructured/images/raw/")
+    landing_prefix = env("LANDING_IMAGES_PREFIX", "persistent/unstructured/images/raw/")
     trusted_prefix = env("TRUSTED_IMAGES_PREFIX", "unstructured/images/clean/")
     metadata_prefix = env("TRUSTED_METADATA_PREFIX", "metadata/unstructured/images/")
     resize_max_dim = int(env("TRUSTED_IMAGE_RESIZE_MAX_DIM", "512"))
@@ -238,13 +245,13 @@ def main() -> None:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     print("[Trusted][Images][Spark] Starting image validation and standardization...")
-    print(f"[Trusted][Images][Spark] Source: s3://{bronze_bucket}/{bronze_prefix}")
+    print(f"[Trusted][Images][Spark] Source: s3://{landing_bucket}/{landing_prefix}")
     print(f"[Trusted][Images][Spark] Target: s3://{trusted_bucket}/{trusted_prefix}")
 
     s3 = build_s3_client()
     ensure_bucket_exists(s3, trusted_bucket)
 
-    objects = list_source_images(s3, bronze_bucket, bronze_prefix, max_images)
+    objects = list_source_images(s3, landing_bucket, landing_prefix, max_images)
     print(f"[Trusted][Images][Spark] Source images discovered: {len(objects)}")
 
     spark = build_spark(processed_at)
@@ -272,7 +279,7 @@ def main() -> None:
         "run_id": run_id,
         "processed_at_utc": processed_at,
         "engine": "apache_spark",
-        "source": f"s3://{bronze_bucket}/{bronze_prefix}",
+        "source": f"s3://{landing_bucket}/{landing_prefix}",
         "target": f"s3://{trusted_bucket}/{trusted_prefix}",
         "resize_max_dim": resize_max_dim,
         "jpeg_quality": jpeg_quality,

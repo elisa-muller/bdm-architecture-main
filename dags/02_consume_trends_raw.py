@@ -21,9 +21,9 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
 
-BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+LANDING_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 
-CONSUMER_GROUP = os.getenv("TRENDS_CONSUMER_GROUP", "airflow-trends-bronze")
+CONSUMER_GROUP = os.getenv("TRENDS_CONSUMER_GROUP", "airflow-trends-landing")
 MAX_MESSAGES = int(os.getenv("TRENDS_MAX_MESSAGES", "100"))
 CONSUMER_TIMEOUT_MS = int(os.getenv("TRENDS_CONSUMER_TIMEOUT_MS", "5000"))
 
@@ -35,9 +35,9 @@ CONSUMER_TIMEOUT_MS = int(os.getenv("TRENDS_CONSUMER_TIMEOUT_MS", "5000"))
     schedule="*/5 * * * *",  # every 5 minutes
     catchup=False,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
-    tags=["trends", "kafka", "bronze", "semi-structured"],
+    tags=["trends", "kafka", "landing", "semi-structured"],
 )
-def consume_trends_raw_to_bronze():
+def consume_trends_raw_to_landing():
 
     @task()
     def consume_to_temporal() -> dict:
@@ -88,7 +88,7 @@ def consume_trends_raw_to_bronze():
             )
 
             s3.put_object(
-                Bucket=BRONZE_BUCKET,
+                Bucket=LANDING_BUCKET,
                 Key=object_key,
                 Body=body,
                 ContentType="application/x-ndjson",
@@ -133,7 +133,7 @@ def consume_trends_raw_to_bronze():
 
         migrated = 0
         paginator = s3.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=BRONZE_BUCKET, Prefix=temporal_prefix)
+        pages = paginator.paginate(Bucket=LANDING_BUCKET, Prefix=temporal_prefix)
 
         for page in pages:
             if "Contents" not in page:
@@ -141,11 +141,11 @@ def consume_trends_raw_to_bronze():
             for obj in page["Contents"]:
                 dest_key = obj["Key"].replace(temporal_prefix, persistent_prefix)
                 s3.copy_object(
-                    CopySource={"Bucket": BRONZE_BUCKET, "Key": obj["Key"]},
-                    Bucket=BRONZE_BUCKET,
+                    CopySource={"Bucket": LANDING_BUCKET, "Key": obj["Key"]},
+                    Bucket=LANDING_BUCKET,
                     Key=dest_key,
                 )
-                s3.delete_object(Bucket=BRONZE_BUCKET, Key=obj["Key"])
+                s3.delete_object(Bucket=LANDING_BUCKET, Key=obj["Key"])
                 migrated += 1
 
         return {"migrated": migrated, "date": date_part, "hour": hour_part}
@@ -195,7 +195,7 @@ def consume_trends_raw_to_bronze():
         )
 
         metadata_key = metadata_object_key("metadata/semi_structured/jsonl/", metadata)
-        write_metadata_boto3(s3, BRONZE_BUCKET, metadata_key, metadata)
+        write_metadata_boto3(s3, LANDING_BUCKET, metadata_key, metadata)
 
         return f"Metadata recorded: {metadata_key}"
 
@@ -205,4 +205,4 @@ def consume_trends_raw_to_bronze():
     record_metadata(ingest, migration)
 
 
-consume_trends_raw_to_bronze()
+consume_trends_raw_to_landing()

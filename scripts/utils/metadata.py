@@ -1,6 +1,6 @@
-"""Operational metadata helpers for Bronze ingestion.
+"""Operational metadata helpers for Landing ingestion.
 
-Bronze ingestion jobs all follow the same pattern: read from an external
+Landing ingestion jobs all follow the same pattern: read from an external
 source, write a temporal raw artifact, migrate or persist it, and record a
 small JSON run report. Later zones keep transformation-specific metadata in
 their own scripts because their quality and lineage details differ by job.
@@ -34,7 +34,7 @@ def create_metadata_record(
     source_path: str | None = None,
     quality_summary: dict[str, Any] | None = None,
 ) -> dict:
-    """Create a standardized Bronze ingestion metadata record.
+    """Create a standardized Landing ingestion metadata record.
 
     The original field names are kept for compatibility with the existing
     DAGs, while the explicit zone/stage/source/target fields make the record
@@ -50,7 +50,7 @@ def create_metadata_record(
     return {
         "schema_version": SCHEMA_VERSION,
         "metadata_type": "operational_ingestion_run",
-        "zone": "bronze",
+        "zone": "landing",
         "stage": "landing_ingestion",
         "timestamp": timestamp,
         "timestamp_utc": timestamp,

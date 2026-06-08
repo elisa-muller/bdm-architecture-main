@@ -36,7 +36,7 @@ MINIO_ENDPOINT = MINIO_ENDPOINT.replace("http://", "").replace("https://", "").r
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
-MINIO_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+MINIO_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 
 API_URL = os.getenv("LASTFM_API_URL", "http://ws.audioscrobbler.com/2.0/")
 
@@ -302,7 +302,7 @@ def write_raw_delta_to_minio(df_raw: pd.DataFrame, delta_uri: str) -> dict:
     }
 
 
-def record_bronze_metadata(raw_object: str, record_count: int, delta_stats: dict) -> str:
+def record_landing_metadata(raw_object: str, record_count: int, delta_stats: dict) -> str:
     metadata = create_metadata_record(
         dataset_name="lastfm_raw_tracks",
         data_type="structured",
@@ -331,7 +331,7 @@ def record_bronze_metadata(raw_object: str, record_count: int, delta_stats: dict
     )
     metadata_key = metadata_object_key("metadata/structured/lastfm/", metadata)
     metadata_uri = write_metadata_minio(minio_client, MINIO_BUCKET, metadata_key, metadata)
-    print(f"[Last.fm] Bronze metadata -> {metadata_uri}")
+    print(f"[Last.fm] Landing metadata -> {metadata_uri}")
     return metadata_uri
 
 
@@ -380,7 +380,7 @@ def main():
 
     upload_csv_to_minio(df_raw, MINIO_BUCKET, raw_object)
     delta_stats = write_raw_delta_to_minio(df_raw, DELTA_URI)
-    record_bronze_metadata(raw_object, len(df_raw), delta_stats)
+    record_landing_metadata(raw_object, len(df_raw), delta_stats)
 
     print("\n[Last.fm] Pipeline finished successfully.")
     print(f"[Last.fm] Temporal raw CSV        -> s3://{MINIO_BUCKET}/{raw_object}")

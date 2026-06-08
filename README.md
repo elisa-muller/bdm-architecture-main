@@ -1,6 +1,6 @@
 # BDM P2: Music Intelligence Lakehouse
 
-This repository contains the second part of the Big Data Management architecture project. It extends the P1 Landing Zone into a complete local lakehouse-style platform with Bronze, Trusted, Exploitation, and Consumption layers, orchestrated with Airflow and supported by Kafka, MinIO, Spark, Milvus, and a Streamlit dashboard.
+This repository contains the second part of the Big Data Management architecture project. It extends the P1 Landing Zone into a complete local lakehouse-style platform with Landing, Trusted, Exploitation, and Consumption layers, orchestrated with Airflow and supported by Kafka, MinIO, Spark, Milvus, and a Streamlit dashboard.
 
 The platform integrates four data families:
 
@@ -27,7 +27,7 @@ The platform integrates four data families:
 
 The project is organized into the following zones:
 
-- `Bronze`: raw and persistent ingested data from Kafka streams and batch APIs.
+- `Landing`: raw and persistent ingested data from Kafka streams and batch APIs.
 - `Trusted`: cleaned and standardized datasets for images, trends, music, and feedback.
 - `Exploitation`: analytical outputs, recommender features, embeddings, and Milvus indexes.
 - `Consumption`: dashboard-facing recommendation events, feedback summaries, and final recommendation outcome tables.
@@ -48,7 +48,7 @@ The architecture combines streaming and batch processing:
 | Component | Role |
 |---|---|
 | Kafka | Streaming buffer for images, trends, recommendation requests, and feedback |
-| MinIO | S3-compatible storage for Bronze, Trusted, Exploitation, and Consumption zones |
+| MinIO | S3-compatible storage for Landing, Trusted, Exploitation, and Consumption zones |
 | Airflow | Orchestration of all DAGs |
 | Spark | Batch transformations and feature generation |
 | Milvus | Vector database for song embeddings |
@@ -85,20 +85,20 @@ This separation makes the system easier to validate because each layer can be ch
 ```text
 Streaming image and trend producers
         -> Kafka topics
-        -> Bronze raw storage in MinIO
+        -> Landing raw storage in MinIO
         -> Trusted cleaning jobs
         -> Exploitation features and metrics
         -> Dashboard and recommender outputs
 
 Structured music batch APIs
-        -> Bronze structured storage
+        -> Landing structured storage
         -> Trusted music dataset
         -> Song audio features
         -> Recommender feature table
         -> Song embedding index in Milvus
 
 Recommendation feedback stream
-        -> Bronze feedback events
+        -> Landing feedback events
         -> Trusted feedback dataset
         -> Recommendation outcome metrics
         -> Dashboard KPIs
@@ -152,7 +152,7 @@ The project is considered ready when:
 
 - Airflow imports all DAGs without errors.
 - `00_init` creates the required MinIO buckets, folder structure, and Kafka topics.
-- Raw ingestion DAGs write data to Bronze.
+- Raw ingestion DAGs write data to Landing.
 - Trusted DAGs clean and standardize the raw inputs.
 - Exploitation DAGs generate the expected feature, embedding, index, and metric outputs.
 - The dashboard can read the Exploitation outputs without missing-table errors.

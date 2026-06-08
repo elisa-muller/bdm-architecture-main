@@ -27,11 +27,11 @@ COMMON_ENV = {
         "MINIO_SECRET_KEY",
         os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"),
     ),
-    "BRONZE_BUCKET": os.getenv("BRONZE_BUCKET", "bronze"),
+    "LANDING_BUCKET": os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing")),
     "TRUSTED_BUCKET": os.getenv("TRUSTED_BUCKET", "trusted"),
-    "BRONZE_IMAGES_PREFIX": os.getenv(
-        "BRONZE_IMAGES_PREFIX",
-        "persistent/unstructured/images/raw/",
+    "LANDING_IMAGES_PREFIX": os.getenv(
+        "LANDING_IMAGES_PREFIX",
+        os.getenv("BRONZE_IMAGES_PREFIX", "persistent/unstructured/images/raw/"),
     ),
     "TRUSTED_IMAGES_PREFIX": os.getenv(
         "TRUSTED_IMAGES_PREFIX",

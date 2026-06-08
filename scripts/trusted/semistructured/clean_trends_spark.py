@@ -20,9 +20,9 @@ ENV_NAMES = [
     "MINIO_SECRET_KEY",
     "MINIO_ROOT_USER",
     "MINIO_ROOT_PASSWORD",
-    "BRONZE_BUCKET",
+    "LANDING_BUCKET",
     "TRUSTED_BUCKET",
-    "BRONZE_TRENDS_PREFIX",
+    "LANDING_TRENDS_PREFIX",
     "TRUSTED_TRENDS_DELTA_URI",
     "TRUSTED_TRENDS_REJECTED_PREFIX",
     "TRUSTED_METADATA_PREFIX",
@@ -85,7 +85,14 @@ RAW_SCHEMA = StructType(
 
 
 def env(name: str, default: str) -> str:
-    return os.getenv(name, default)
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    if name.startswith("LANDING_"):
+        legacy_value = os.getenv(name.replace("LANDING_", "BRONZE_", 1))
+        if legacy_value is not None:
+            return legacy_value
+    return default
 
 
 def build_s3_client():
@@ -282,11 +289,11 @@ def canonicalize_record(payload: dict[str, Any]) -> dict[str, str | None]:
 
 def read_jsonl_partition(rows: Iterable[dict]) -> Iterable[dict]:
     s3 = build_s3_client()
-    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    landing_bucket = env("LANDING_BUCKET", "landing")
 
     for obj in rows:
         source_key = obj["Key"]
-        response = s3.get_object(Bucket=bronze_bucket, Key=source_key)
+        response = s3.get_object(Bucket=landing_bucket, Key=source_key)
         body = response["Body"].read().decode("utf-8", errors="replace")
 
         for line_number, line in enumerate(body.splitlines(), start=1):
@@ -294,7 +301,7 @@ def read_jsonl_partition(rows: Iterable[dict]) -> Iterable[dict]:
                 continue
 
             base = {
-                "source_bucket": bronze_bucket,
+                "source_bucket": landing_bucket,
                 "source_key": source_key,
                 "source_line_number": line_number,
                 "source_last_modified_utc": obj.get("LastModified"),
@@ -607,9 +614,9 @@ def build_spark(processed_at: str, run_id: str) -> SparkSession:
 
 
 def main() -> None:
-    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    landing_bucket = env("LANDING_BUCKET", "landing")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
-    bronze_prefix = env("BRONZE_TRENDS_PREFIX", "persistent/semi_structured/trends/raw/")
+    landing_prefix = env("LANDING_TRENDS_PREFIX", "persistent/semi_structured/trends/raw/")
     trusted_delta_uri = env(
         "TRUSTED_TRENDS_DELTA_URI",
         f"s3://{trusted_bucket}/semi_structured/trends/delta/trends_clean_delta",
@@ -629,13 +636,13 @@ def main() -> None:
     os.environ["TRUSTED_TRENDS_PROCESSED_AT"] = processed_at
 
     print("[Trusted][Trends][Spark] Starting trend JSONL validation and standardization...")
-    print(f"[Trusted][Trends][Spark] Source: s3://{bronze_bucket}/{bronze_prefix}")
+    print(f"[Trusted][Trends][Spark] Source: s3://{landing_bucket}/{landing_prefix}")
     print(f"[Trusted][Trends][Spark] Target: {trusted_delta_uri}")
 
     s3 = build_s3_client()
     ensure_bucket_exists(s3, trusted_bucket)
 
-    objects = list_source_jsonl(s3, bronze_bucket, bronze_prefix, 0)
+    objects = list_source_jsonl(s3, landing_bucket, landing_prefix, 0)
     manifest = load_processed_manifest(s3, trusted_bucket, manifest_key)
     trusted_table_exists = delta_table_exists(trusted_delta_uri)
     force_all_files = full_refresh or not trusted_table_exists
@@ -653,7 +660,7 @@ def main() -> None:
             "run_id": run_id,
             "processed_at_utc": processed_at,
             "engine": "apache_spark",
-            "source": f"s3://{bronze_bucket}/{bronze_prefix}",
+            "source": f"s3://{landing_bucket}/{landing_prefix}",
             "target": trusted_delta_uri,
             "status": "no_new_source_files",
             "total_source_files": len(objects),
@@ -726,7 +733,7 @@ def main() -> None:
         "run_id": run_id,
         "processed_at_utc": processed_at,
         "engine": "apache_spark",
-        "source": f"s3://{bronze_bucket}/{bronze_prefix}",
+        "source": f"s3://{landing_bucket}/{landing_prefix}",
         "target": trusted_delta_uri,
         "total_source_files": len(objects),
         "source_files": len(pending_objects),

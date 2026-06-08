@@ -27,11 +27,11 @@ COMMON_ENV = {
         "MINIO_SECRET_KEY",
         os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"),
     ),
-    "BRONZE_BUCKET": os.getenv("BRONZE_BUCKET", "bronze"),
+    "LANDING_BUCKET": os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing")),
     "TRUSTED_BUCKET": os.getenv("TRUSTED_BUCKET", "trusted"),
-    "BRONZE_TRENDS_PREFIX": os.getenv(
-        "BRONZE_TRENDS_PREFIX",
-        "persistent/semi_structured/trends/raw/",
+    "LANDING_TRENDS_PREFIX": os.getenv(
+        "LANDING_TRENDS_PREFIX",
+        os.getenv("BRONZE_TRENDS_PREFIX", "persistent/semi_structured/trends/raw/"),
     ),
     "TRUSTED_TRENDS_DELTA_URI": os.getenv(
         "TRUSTED_TRENDS_DELTA_URI",

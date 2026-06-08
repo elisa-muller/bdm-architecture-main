@@ -19,8 +19,8 @@ from pyspark.sql import functions as F
 ENV_NAMES = [
     "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY",
     "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "MINIO_SECURE",
-    "AWS_REGION", "BRONZE_BUCKET", "TRUSTED_BUCKET",
-    "BRONZE_TRACKS_PREFIX", "TRUSTED_TRACKS_DELTA_URI",
+    "AWS_REGION", "LANDING_BUCKET", "TRUSTED_BUCKET",
+    "LANDING_TRACKS_PREFIX", "TRUSTED_TRACKS_DELTA_URI",
     "TRUSTED_TRACKS_REJECTED_PREFIX", "TRUSTED_METADATA_PREFIX",
     "SPARK_EXECUTOR_PYTHON",
 ]
@@ -54,7 +54,14 @@ FINAL_COLS = [
 
 
 def env(name: str, default: str) -> str:
-    return os.getenv(name, default)
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    if name.startswith("LANDING_"):
+        legacy_value = os.getenv(name.replace("LANDING_", "BRONZE_", 1))
+        if legacy_value is not None:
+            return legacy_value
+    return default
 
 
 def minio_endpoint_url() -> str:
@@ -138,13 +145,13 @@ def add_quality_error(errors: list[F.Column], condition: F.Column, label: str) -
 def validate_schema(df: DataFrame) -> None:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
-        raise ValueError(f"Missing required bronze columns: {sorted(missing)}")
+        raise ValueError(f"Missing required landing columns: {sorted(missing)}")
 
 
 def validate_pandas_schema(df: pd.DataFrame) -> None:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
-        raise ValueError(f"Missing required bronze columns: {sorted(missing)}")
+        raise ValueError(f"Missing required landing columns: {sorted(missing)}")
 
 
 def clean_string_series(series: pd.Series) -> pd.Series:
@@ -454,23 +461,23 @@ def build_spark(processed_at: str, run_id: str) -> SparkSession:
     return builder.getOrCreate()
 
 
-def read_bronze_delta_as_spark(spark: SparkSession, delta_uri: str, partitions: int) -> DataFrame:
-    bronze_table = DeltaTable(delta_uri, storage_options=storage_options())
-    pandas_df = bronze_table.to_pyarrow_table().to_pandas()
+def read_landing_delta_as_spark(spark: SparkSession, delta_uri: str, partitions: int) -> DataFrame:
+    landing_table = DeltaTable(delta_uri, storage_options=storage_options())
+    pandas_df = landing_table.to_pyarrow_table().to_pandas()
     return spark.createDataFrame(pandas_df).repartition(partitions)
 
 
-def read_bronze_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
-    bronze_table = DeltaTable(delta_uri, storage_options=storage_options())
-    return bronze_table.to_pandas()
+def read_landing_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
+    landing_table = DeltaTable(delta_uri, storage_options=storage_options())
+    return landing_table.to_pandas()
 
 
 def main() -> None:
-    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    landing_bucket = env("LANDING_BUCKET", "landing")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
 
-    bronze_prefix = env("BRONZE_TRACKS_PREFIX", "persistent/structured/lastfm/delta/tracks_delta/")
-    bronze_delta_uri = f"s3://{bronze_bucket}/{bronze_prefix.rstrip('/')}"
+    landing_prefix = env("LANDING_TRACKS_PREFIX", "persistent/structured/lastfm/delta/tracks_delta/")
+    landing_delta_uri = f"s3://{landing_bucket}/{landing_prefix.rstrip('/')}"
 
     trusted_delta_uri = env(
         "TRUSTED_TRACKS_DELTA_URI",
@@ -487,7 +494,7 @@ def main() -> None:
     os.environ["TRUSTED_TRACKS_PROCESSED_AT"] = processed_at
 
     print("[Trusted][Last.fm][Spark] Starting track cleaning...")
-    print(f"[Trusted][Last.fm][Spark] Source: {bronze_delta_uri}")
+    print(f"[Trusted][Last.fm][Spark] Source: {landing_delta_uri}")
     print(f"[Trusted][Last.fm][Spark] Target: {trusted_delta_uri}")
 
     s3 = build_s3_client()
@@ -499,7 +506,7 @@ def main() -> None:
     duplicates_removed = 0
     rows_written = 0
 
-    raw_df = read_bronze_delta_as_pandas(bronze_delta_uri)
+    raw_df = read_landing_delta_as_pandas(landing_delta_uri)
     validate_pandas_schema(raw_df)
 
     raw_count = len(raw_df)
@@ -520,7 +527,7 @@ def main() -> None:
         "run_id": run_id,
         "processed_at_utc": processed_at,
         "engine": "apache_spark_python_deltalake",
-        "source": bronze_delta_uri,
+        "source": landing_delta_uri,
         "target": trusted_delta_uri,
         "raw_records": raw_count,
         "valid_records_written": rows_written,

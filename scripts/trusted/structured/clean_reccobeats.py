@@ -20,8 +20,8 @@ from pyspark.sql import types as T
 ENV_NAMES = [
     "MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY",
     "MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD", "MINIO_SECURE",
-    "AWS_REGION", "BRONZE_BUCKET", "TRUSTED_BUCKET",
-    "BRONZE_RECCOBEATS_PREFIX", "TRUSTED_RECCOBEATS_DELTA_URI",
+    "AWS_REGION", "LANDING_BUCKET", "TRUSTED_BUCKET",
+    "LANDING_RECCOBEATS_PREFIX", "TRUSTED_RECCOBEATS_DELTA_URI",
     "TRUSTED_RECCOBEATS_REJECTED_PREFIX", "TRUSTED_METADATA_PREFIX",
     "SPARK_EXECUTOR_PYTHON",
 ]
@@ -62,7 +62,14 @@ FINAL_COLS = [
 
 
 def env(name: str, default: str) -> str:
-    return os.getenv(name, default)
+    value = os.getenv(name)
+    if value is not None:
+        return value
+    if name.startswith("LANDING_"):
+        legacy_value = os.getenv(name.replace("LANDING_", "BRONZE_", 1))
+        if legacy_value is not None:
+            return legacy_value
+    return default
 
 
 def minio_endpoint_url() -> str:
@@ -555,7 +562,7 @@ def write_delta_from_dicts(delta_uri: str, rows: list[dict]) -> int:
     return len(rows)
 
 
-def read_bronze_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
+def read_landing_delta_as_pandas(delta_uri: str) -> pd.DataFrame:
     return DeltaTable(delta_uri, storage_options=storage_options()).to_pandas()
 
 
@@ -588,13 +595,13 @@ def build_spark(processed_at: str, run_id: str) -> SparkSession:
     return builder.getOrCreate()
 
 
-def read_bronze_delta_as_spark(
+def read_landing_delta_as_spark(
     spark: SparkSession,
     delta_uri: str,
     partitions: int,
 ) -> DataFrame:
-    bronze_table = DeltaTable(delta_uri, storage_options=storage_options())
-    pandas_df = bronze_table.to_pyarrow_table().to_pandas()
+    landing_table = DeltaTable(delta_uri, storage_options=storage_options())
+    pandas_df = landing_table.to_pyarrow_table().to_pandas()
     schema = T.StructType(
         [
             T.StructField("rb_track_id", T.StringType(), True),
@@ -623,15 +630,15 @@ def read_bronze_delta_as_spark(
 
 
 def main() -> None:
-    bronze_bucket = env("BRONZE_BUCKET", "bronze")
+    landing_bucket = env("LANDING_BUCKET", "landing")
     trusted_bucket = env("TRUSTED_BUCKET", "trusted")
 
-    bronze_prefix = env(
-        "BRONZE_RECCOBEATS_PREFIX",
+    landing_prefix = env(
+        "LANDING_RECCOBEATS_PREFIX",
         "persistent/structured/reccobeats/delta/audio_features_delta/",
     )
 
-    bronze_delta_uri = f"s3://{bronze_bucket}/{bronze_prefix.rstrip('/')}"
+    landing_delta_uri = f"s3://{landing_bucket}/{landing_prefix.rstrip('/')}"
 
     trusted_delta_uri = env(
         "TRUSTED_RECCOBEATS_DELTA_URI",
@@ -648,7 +655,7 @@ def main() -> None:
     os.environ["TRUSTED_RECCOBEATS_PROCESSED_AT"] = processed_at
 
     print("[Trusted][ReccoBeats] Starting audio feature cleaning...")
-    print(f"[Trusted][ReccoBeats] Source: {bronze_delta_uri}")
+    print(f"[Trusted][ReccoBeats] Source: {landing_delta_uri}")
     print(f"[Trusted][ReccoBeats] Target: {trusted_delta_uri}")
 
     s3 = build_s3_client()
@@ -659,7 +666,7 @@ def main() -> None:
     duplicates_removed = 0
     rows_written = 0
 
-    raw_df = read_bronze_delta_as_pandas(bronze_delta_uri)
+    raw_df = read_landing_delta_as_pandas(landing_delta_uri)
     validate_schema(raw_df)
 
     raw_count = len(raw_df)
@@ -679,7 +686,7 @@ def main() -> None:
         "run_id": run_id,
         "processed_at_utc": processed_at,
         "engine": "pandas_deltalake",
-        "source": bronze_delta_uri,
+        "source": landing_delta_uri,
         "target": trusted_delta_uri,
         "raw_records": raw_count,
         "valid_records_written": rows_written,

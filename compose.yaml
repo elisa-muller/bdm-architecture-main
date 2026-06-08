@@ -44,13 +44,13 @@ x-airflow-common:
     TOPIC_RECOMMENDATION_REQUESTS: 'music-recommendation-requests'
     TOPIC_RECOMMENDATION_FEEDBACK: 'music-recommendation-feedback'
 
-    # Bronze landing zone
-    BRONZE_BUCKET: 'bronze'
+    # Landing zone
+    LANDING_BUCKET: 'landing'
     TRUSTED_BUCKET: 'trusted'
     EXPLOITATION_BUCKET: 'exploitation'
     CONSUMPTION_BUCKET: 'consumption'
-    BRONZE_IMAGES_PATH: 'music_images_raw'
-    BRONZE_TRENDS_PATH: 'music_trends_raw'
+    LANDING_IMAGES_PATH: 'music_images_raw'
+    LANDING_TRENDS_PATH: 'music_trends_raw'
     TRUSTED_IMAGE_MAX_IMAGES: '50'
 
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'

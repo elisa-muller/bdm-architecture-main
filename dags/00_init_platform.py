@@ -23,7 +23,7 @@ TOPIC_RECOMMENDATION_FEEDBACK = os.getenv(
     "music-recommendation-feedback",
 )
 
-BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+LANDING_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 TRUSTED_BUCKET = os.getenv("TRUSTED_BUCKET", "trusted")
 EXPLOITATION_BUCKET = os.getenv("EXPLOITATION_BUCKET", "exploitation")
 CONSUMPTION_BUCKET = os.getenv("CONSUMPTION_BUCKET", "consumption")
@@ -35,7 +35,7 @@ CONSUMPTION_BUCKET = os.getenv("CONSUMPTION_BUCKET", "consumption")
     schedule=None,
     start_date=datetime.now(tz=timezone.utc) - timedelta(days=1),
     catchup=False,
-    tags=["init", "kafka", "minio", "bronze", "trusted", "exploitation"],
+    tags=["init", "kafka", "minio", "landing", "trusted", "exploitation"],
 )
 def init_platform():
 
@@ -53,7 +53,7 @@ def init_platform():
             secure=secure,
         )
 
-        buckets = [BRONZE_BUCKET, TRUSTED_BUCKET, EXPLOITATION_BUCKET, CONSUMPTION_BUCKET]
+        buckets = [LANDING_BUCKET, TRUSTED_BUCKET, EXPLOITATION_BUCKET, CONSUMPTION_BUCKET]
         created_or_existing = []
 
         for bucket_name in buckets:
@@ -67,7 +67,7 @@ def init_platform():
         return created_or_existing
 
     @task()
-    def create_bronze_layout(bucket_names: list[str]) -> list[str]:
+    def create_landing_layout(bucket_names: list[str]) -> list[str]:
         from minio import Minio
         from minio.error import S3Error
 
@@ -82,26 +82,26 @@ def init_platform():
         )
 
         prefixes = [
-            # Landing / Bronze
-            f"{BRONZE_BUCKET}:temporal/structured/lastfm/raw/",
-            f"{BRONZE_BUCKET}:temporal/structured/musicbrainz/raw/",
-            f"{BRONZE_BUCKET}:temporal/structured/reccobeats/raw/",
-            f"{BRONZE_BUCKET}:temporal/semi_structured/trends/raw/",
-            f"{BRONZE_BUCKET}:temporal/unstructured/images/raw/",
-            f"{BRONZE_BUCKET}:persistent/structured/lastfm/delta/",
-            f"{BRONZE_BUCKET}:persistent/structured/musicbrainz/delta/",
-            f"{BRONZE_BUCKET}:persistent/structured/reccobeats/delta/",
-            f"{BRONZE_BUCKET}:persistent/semi_structured/trends/raw/",
-            f"{BRONZE_BUCKET}:persistent/semi_structured/trends/delta/",
-            f"{BRONZE_BUCKET}:persistent/unstructured/images/raw/",
-            f"{BRONZE_BUCKET}:temporal/recommender/feedback/raw/",
-            f"{BRONZE_BUCKET}:persistent/recommender/feedback/raw/",
-            f"{BRONZE_BUCKET}:metadata/structured/lastfm/",
-            f"{BRONZE_BUCKET}:metadata/structured/musicbrainz/",
-            f"{BRONZE_BUCKET}:metadata/structured/reccobeats/",
-            f"{BRONZE_BUCKET}:metadata/semi_structured/jsonl/",
-            f"{BRONZE_BUCKET}:metadata/unstructured/image/",
-            f"{BRONZE_BUCKET}:metadata/recommender/feedback/jsonl/",
+            # Landing
+            f"{LANDING_BUCKET}:temporal/structured/lastfm/raw/",
+            f"{LANDING_BUCKET}:temporal/structured/musicbrainz/raw/",
+            f"{LANDING_BUCKET}:temporal/structured/reccobeats/raw/",
+            f"{LANDING_BUCKET}:temporal/semi_structured/trends/raw/",
+            f"{LANDING_BUCKET}:temporal/unstructured/images/raw/",
+            f"{LANDING_BUCKET}:persistent/structured/lastfm/delta/",
+            f"{LANDING_BUCKET}:persistent/structured/musicbrainz/delta/",
+            f"{LANDING_BUCKET}:persistent/structured/reccobeats/delta/",
+            f"{LANDING_BUCKET}:persistent/semi_structured/trends/raw/",
+            f"{LANDING_BUCKET}:persistent/semi_structured/trends/delta/",
+            f"{LANDING_BUCKET}:persistent/unstructured/images/raw/",
+            f"{LANDING_BUCKET}:temporal/recommender/feedback/raw/",
+            f"{LANDING_BUCKET}:persistent/recommender/feedback/raw/",
+            f"{LANDING_BUCKET}:metadata/structured/lastfm/",
+            f"{LANDING_BUCKET}:metadata/structured/musicbrainz/",
+            f"{LANDING_BUCKET}:metadata/structured/reccobeats/",
+            f"{LANDING_BUCKET}:metadata/semi_structured/jsonl/",
+            f"{LANDING_BUCKET}:metadata/unstructured/image/",
+            f"{LANDING_BUCKET}:metadata/recommender/feedback/jsonl/",
 
             # Trusted
             f"{TRUSTED_BUCKET}:structured/lastfm/delta/",
@@ -207,7 +207,7 @@ def init_platform():
         return created_or_existing
 
     buckets = create_zone_buckets()
-    layout = create_bronze_layout(buckets)
+    layout = create_landing_layout(buckets)
     topics = create_kafka_topics()
 
     buckets >> layout

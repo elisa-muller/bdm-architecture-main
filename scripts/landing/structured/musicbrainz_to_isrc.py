@@ -31,7 +31,7 @@ MINIO_ENDPOINT = MINIO_ENDPOINT.replace("http://", "").replace("https://", "").r
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
-MINIO_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+MINIO_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 
 LASTFM_TRACKS_DELTA_URI = (
     f"s3://{MINIO_BUCKET}/persistent/structured/lastfm/delta/tracks_delta"
@@ -372,7 +372,7 @@ def flush_batch(batch_rows: list, batch_number: int, stats: dict) -> list:
     return []
 
 
-def record_bronze_metadata(record_count: int, batch_count: int, stats: dict) -> str:
+def record_landing_metadata(record_count: int, batch_count: int, stats: dict) -> str:
     metadata = create_metadata_record(
         dataset_name="musicbrainz_isrc_resolution",
         data_type="structured",
@@ -400,7 +400,7 @@ def record_bronze_metadata(record_count: int, batch_count: int, stats: dict) -> 
     )
     metadata_key = metadata_object_key("metadata/structured/musicbrainz/", metadata)
     metadata_uri = write_metadata_minio(minio_client, MINIO_BUCKET, metadata_key, metadata)
-    print(f"[MusicBrainz] Bronze metadata -> {metadata_uri}")
+    print(f"[MusicBrainz] Landing metadata -> {metadata_uri}")
     return metadata_uri
 
 
@@ -556,7 +556,7 @@ def main():
             batch_number += 1
             batch_rows = flush_batch(batch_rows, batch_number, stats)
 
-        record_bronze_metadata(
+        record_landing_metadata(
             record_count=len(df_to_process),
             batch_count=batch_number,
             stats=stats,
@@ -580,7 +580,7 @@ def main():
         f"[MusicBrainz] Temporal CSV batches in MinIO: "
         f"s3://{MINIO_BUCKET}/{TEMPORAL_PREFIX}"
     )
-    record_bronze_metadata(
+    record_landing_metadata(
         record_count=len(df_to_process),
         batch_count=batch_number,
         stats=stats,

@@ -23,23 +23,23 @@ TOPIC_RECOMMENDATION_FEEDBACK = os.getenv(
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin"))
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin"))
-BRONZE_BUCKET = os.getenv("BRONZE_BUCKET", "bronze")
+LANDING_BUCKET = os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing"))
 
-CONSUMER_GROUP = os.getenv("RECOMMENDATION_FEEDBACK_CONSUMER_GROUP", "airflow-recommendation-feedback-bronze")
+CONSUMER_GROUP = os.getenv("RECOMMENDATION_FEEDBACK_CONSUMER_GROUP", "airflow-recommendation-feedback-landing")
 MAX_MESSAGES = int(os.getenv("RECOMMENDATION_FEEDBACK_MAX_MESSAGES", "100"))
 CONSUMER_TIMEOUT_MS = int(os.getenv("RECOMMENDATION_FEEDBACK_CONSUMER_TIMEOUT_MS", "5000"))
 
 
 @dag(
     dag_id="12_raw_feedback",
-    description="Consume recommendation feedback events from Kafka and store them as raw JSONL in Bronze.",
+    description="Consume recommendation feedback events from Kafka and store them as raw JSONL in Landing.",
     start_date=datetime(2025, 1, 1),
     schedule="*/5 * * * *",
     catchup=False,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=1)},
-    tags=["feedback", "recommendations", "kafka", "bronze"],
+    tags=["feedback", "recommendations", "kafka", "landing"],
 )
-def consume_recommendation_feedback_raw_to_bronze():
+def consume_recommendation_feedback_raw_to_landing():
 
     @task()
     def consume_to_temporal() -> dict:
@@ -83,7 +83,7 @@ def consume_recommendation_feedback_raw_to_bronze():
                 aws_secret_access_key=MINIO_SECRET_KEY,
             )
             s3.put_object(
-                Bucket=BRONZE_BUCKET,
+                Bucket=LANDING_BUCKET,
                 Key=object_key,
                 Body=body,
                 ContentType="application/x-ndjson",
@@ -126,15 +126,15 @@ def consume_recommendation_feedback_raw_to_bronze():
 
         migrated = 0
         paginator = s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=BRONZE_BUCKET, Prefix=temporal_prefix):
+        for page in paginator.paginate(Bucket=LANDING_BUCKET, Prefix=temporal_prefix):
             for obj in page.get("Contents", []):
                 dest_key = obj["Key"].replace(temporal_prefix, persistent_prefix)
                 s3.copy_object(
-                    CopySource={"Bucket": BRONZE_BUCKET, "Key": obj["Key"]},
-                    Bucket=BRONZE_BUCKET,
+                    CopySource={"Bucket": LANDING_BUCKET, "Key": obj["Key"]},
+                    Bucket=LANDING_BUCKET,
                     Key=dest_key,
                 )
-                s3.delete_object(Bucket=BRONZE_BUCKET, Key=obj["Key"])
+                s3.delete_object(Bucket=LANDING_BUCKET, Key=obj["Key"])
                 migrated += 1
 
         return {"migrated": migrated, "date": date_part, "hour": hour_part}
@@ -189,7 +189,7 @@ def consume_recommendation_feedback_raw_to_bronze():
             "metadata/recommender/feedback/jsonl/",
             metadata,
         )
-        write_metadata_boto3(s3, BRONZE_BUCKET, metadata_key, metadata)
+        write_metadata_boto3(s3, LANDING_BUCKET, metadata_key, metadata)
 
         return f"Metadata recorded: {metadata_key}"
 
@@ -209,4 +209,4 @@ def consume_recommendation_feedback_raw_to_bronze():
     metadata >> trigger_trusted_feedback_task
 
 
-consume_recommendation_feedback_raw_to_bronze()
+consume_recommendation_feedback_raw_to_landing()

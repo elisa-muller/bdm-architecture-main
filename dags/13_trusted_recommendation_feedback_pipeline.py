@@ -16,11 +16,14 @@ COMMON_ENV = {
     "MINIO_ENDPOINT": os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
     "MINIO_ACCESS_KEY": os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin")),
     "MINIO_SECRET_KEY": os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")),
-    "BRONZE_BUCKET": os.getenv("BRONZE_BUCKET", "bronze"),
+    "LANDING_BUCKET": os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing")),
     "TRUSTED_BUCKET": os.getenv("TRUSTED_BUCKET", "trusted"),
-    "BRONZE_RECOMMENDATION_FEEDBACK_PREFIX": os.getenv(
-        "BRONZE_RECOMMENDATION_FEEDBACK_PREFIX",
-        "persistent/recommender/feedback/raw/",
+    "LANDING_RECOMMENDATION_FEEDBACK_PREFIX": os.getenv(
+        "LANDING_RECOMMENDATION_FEEDBACK_PREFIX",
+        os.getenv(
+            "BRONZE_RECOMMENDATION_FEEDBACK_PREFIX",
+            "persistent/recommender/feedback/raw/",
+        ),
     ),
     "TRUSTED_RECOMMENDATION_FEEDBACK_DELTA_URI": os.getenv(
         "TRUSTED_RECOMMENDATION_FEEDBACK_DELTA_URI",

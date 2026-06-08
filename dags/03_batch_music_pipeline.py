@@ -29,7 +29,7 @@ COMMON_ENV = {
     "MINIO_ACCESS_KEY": os.getenv("MINIO_ACCESS_KEY", os.getenv("MINIO_ROOT_USER", "minioadmin")),
     "MINIO_SECRET_KEY": os.getenv("MINIO_SECRET_KEY", os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")),
     "MINIO_SECURE": os.getenv("MINIO_SECURE", "false"),
-    "BRONZE_BUCKET": os.getenv("BRONZE_BUCKET", "bronze"),
+    "LANDING_BUCKET": os.getenv("LANDING_BUCKET", os.getenv("BRONZE_BUCKET", "landing")),
     # Optional AWS compatibility
     "AWS_REGION": os.getenv("AWS_REGION", "us-east-1"),
 }
