@@ -264,7 +264,7 @@ services:
       - spark.pyspark.python=/usr/bin/python3.12
       - --conf
       - spark.executorEnv.PYSPARK_PYTHON=/usr/bin/python3.12
-      - /opt/airflow/scripts/streaming/unstructured/realtime_image_embeddings_spark.py
+      - /opt/airflow/scripts/consumption/recommender/realtime_image_embeddings_spark.py
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       TOPIC_IMAGES_RAW: music-images-raw
@@ -315,7 +315,7 @@ services:
       - spark.pyspark.python=/usr/bin/python3.12
       - --conf
       - spark.executorEnv.PYSPARK_PYTHON=/usr/bin/python3.12
-      - /opt/airflow/scripts/streaming/recommender/realtime_song_recommendations_spark.py
+      - /opt/airflow/scripts/consumption/recommender/realtime_song_recommendations_spark.py
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       TOPIC_RECOMMENDATION_REQUESTS: music-recommendation-requests
